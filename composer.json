@@ -3,17 +3,25 @@
     "description": "Castor building blocks to drive a Laravel Docker Compose stack: compose commands, git worktrees, quality tools, Vite, and one local Traefik ingress with mkcert TLS shared by every project.",
     "type": "library",
     "license": "MIT",
-    "keywords": ["castor", "docker", "docker-compose", "traefik", "mkcert", "laravel", "developer-experience"],
+    "keywords": [
+        "castor",
+        "docker",
+        "docker-compose",
+        "traefik",
+        "mkcert",
+        "laravel",
+        "developer-experience"
+    ],
     "authors": [
         {
             "name": "Olivier Grandmougin"
         }
     ],
     "require": {
-        "php": ">=8.4",
-        "jolicode/castor": "^1.9"
+        "php": ">=8.4"
     },
     "require-dev": {
+        "jolicode/castor": "^1.9",
         "laravel/pint": "^1.25",
         "pestphp/pest": "^4.1 || ^5.0",
         "phpstan/phpstan": "^2.1",
@@ -41,5 +49,8 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "suggest": {
+        "jolicode/castor": "The classes run inside Castor task files and call its functions (run, io, context, parallel)."
+    }
 }

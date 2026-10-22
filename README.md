@@ -25,6 +25,8 @@ Castor installs the package itself from `.castor/castor.composer.json`:
 
 Run `castor composer update` once and commit `.castor/castor.composer.lock`. Castor loads `.castor/vendor/autoload.php` on every run.
 
+The package has no runtime dependency: the Castor binary provides the functions it calls. Tests that exercise these classes in the application can therefore also require it as a Composer `require-dev`, with the same `vcs` repository, without any version conflict.
+
 ## Describe the project
 
 ```php
