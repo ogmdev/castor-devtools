@@ -1,0 +1,45 @@
+{
+    "name": "ogmdev/castor-devtools",
+    "description": "Castor building blocks to drive a Laravel Docker Compose stack: compose commands, git worktrees, quality tools, Vite, and one local Traefik ingress with mkcert TLS shared by every project.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["castor", "docker", "docker-compose", "traefik", "mkcert", "laravel", "developer-experience"],
+    "authors": [
+        {
+            "name": "Olivier Grandmougin"
+        }
+    ],
+    "require": {
+        "php": ">=8.4",
+        "jolicode/castor": "^1.9"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.25",
+        "pestphp/pest": "^4.1 || ^5.0",
+        "phpstan/phpstan": "^2.1",
+        "symfony/yaml": "^8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ogmdev\\CastorDevtools\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Ogmdev\\CastorDevtools\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "phpstan": "phpstan analyse --memory-limit=512M --no-progress",
+        "pint": "pint --test"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
