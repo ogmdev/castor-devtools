@@ -12,11 +12,6 @@
         "laravel",
         "developer-experience"
     ],
-    "authors": [
-        {
-            "name": "Olivier Grandmougin"
-        }
-    ],
     "require": {
         "php": "^8.4"
     },
