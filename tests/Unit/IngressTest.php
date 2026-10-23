@@ -68,11 +68,11 @@ test('the docker socket can be moved for rootless docker or podman', function ()
         ->toContain('${LOCAL_INGRESS_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro');
 });
 
-test('the compose file labels the running ingress with the revision and the data directory the code expects', function (): void {
+test('the compose file labels the running ingress with the package version and the data directory the code expects', function (): void {
     $traefik = ingressCompose()['services'][Ingress::Service];
     $dataDirectory = '${LOCAL_INGRESS_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/local-ingress}';
 
-    expect($traefik['labels'][Ingress::RevisionLabel])->toBe(Ingress::Revision)
+    expect($traefik['labels'][Ingress::VersionLabel])->toBe(Ingress::Version)
         ->and($traefik['labels'][Ingress::DataDirectoryLabel])->toBe($dataDirectory)
         ->and($traefik['volumes'])->toContain(
             $dataDirectory.'/dynamic:/etc/traefik/dynamic:ro',
@@ -106,14 +106,40 @@ test('the traefik image comes from the workstation, never from a project', funct
         ->and(withEnvironment(['LOCAL_INGRESS_TRAEFIK_IMAGE' => null], fn (): string => (new Ingress(dataDirectory: '/data'))->traefikImage()))->toBe(Ingress::DefaultImage);
 });
 
-test('a running ingress is reused as is, and only reported when it differs from this project', function (): void {
+test('a running ingress of the same version or newer is kept, an older or unversioned one is recreated', function (): void {
+    $ingress = new Ingress(dataDirectory: '/data');
+
+    expect($ingress->isUpToDate(Ingress::Version))->toBeTrue()
+        ->and($ingress->isUpToDate('9.0.0'))->toBeTrue()
+        ->and($ingress->isUpToDate('0.1.1'))->toBeFalse()
+        ->and($ingress->isUpToDate(''))->toBeFalse()
+        ->and($ingress->upgradeMessage(''))->toContain('an unversioned release', Ingress::Version)
+        ->and($ingress->upgradeMessage('0.1.1'))->toContain('version 0.1.1');
+});
+
+test('a kept ingress is only reported when it is newer than this project or reads another data directory', function (): void {
     $ingress = new Ingress(dataDirectory: '/data');
 
     expect($ingress->parseRunningIngress(''))->toBeNull()
-        ->and($ingress->parseRunningIngress(Ingress::Revision."\t/data\n"))->toBe(['revision' => Ingress::Revision, 'dataDirectory' => '/data'])
-        ->and($ingress->runningIngressWarnings(Ingress::Revision, '/data'))->toBe([])
-        ->and($ingress->runningIngressWarnings('1', '/data')[0])->toContain('revision 1', '--force-recreate')
-        ->and($ingress->runningIngressWarnings(Ingress::Revision, '/elsewhere')[0])->toContain('/elsewhere', '/data', 'LOCAL_INGRESS_DATA_DIR');
+        ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data'])
+        ->and($ingress->runningIngressWarnings(Ingress::Version, '/data'))->toBe([])
+        ->and($ingress->runningIngressWarnings('9.0.0', '/data')[0])->toContain('version 9.0.0', 'Update ogmdev/castor-devtools in this project')
+        ->and($ingress->runningIngressWarnings(Ingress::Version, '/elsewhere')[0])->toContain('/elsewhere', '/data', 'LOCAL_INGRESS_DATA_DIR');
+});
+
+test('a port held by another container names that container, its compose project and the command that frees it', function (): void {
+    $ingress = new Ingress(dataDirectory: '/data');
+    $holders = $ingress->parsePortHolders("acme-traefik-1\tacme\ttraefik\nlocal-ingress-traefik-1\tlocal-ingress\ttraefik\nstray\t\t\n");
+    $message = (string) $ingress->portConflictMessage([8000 => $holders, 8443 => []]);
+
+    expect($holders)->toBe([
+        ['name' => 'acme-traefik-1', 'project' => 'acme', 'service' => 'traefik'],
+        ['name' => 'stray', 'project' => '', 'service' => ''],
+    ])
+        ->and($message)->toContain('port 8000 is published by the container acme-traefik-1 of the compose project acme: docker compose --project-name acme stop traefik')
+        ->and($message)->toContain('port 8000 is published by the container stray: docker stop stray')
+        ->and($ingress->portConflictMessage([8000 => [], 8443 => []]))->toBeNull()
+        ->and($ingress->buildPortHoldersCommand(8443))->toContain('publish=8443');
 });
 
 test('the ingress commands target one compose project and find it by its compose labels', function (): void {

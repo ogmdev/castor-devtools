@@ -27,7 +27,7 @@ services:
       - local-ingress
     labels:
       local-ingress.enable: "true"
-      local-ingress.revision: "2"
+      local-ingress.version: "0.2.0"
       local-ingress.data-dir: ${LOCAL_INGRESS_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/local-ingress}
       traefik.http.routers.local-ingress-dashboard.rule: Host(`ingress.localhost`)
       traefik.http.routers.local-ingress-dashboard.entrypoints: web

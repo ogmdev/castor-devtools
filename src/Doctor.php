@@ -65,6 +65,7 @@ final readonly class Doctor
             'TLS certificates' => fn (): array => $this->environment->tlsFindings(),
             'Docker' => fn (): array => $this->dockerFindings(),
             'Local ingress' => fn (): array => $this->environment->ingressFindings(),
+            'Ingress routes' => fn (): array => $this->environment->routingFindings(),
             'Stack vhosts' => fn (): array => $this->environment->vhostFindings(),
         ];
     }

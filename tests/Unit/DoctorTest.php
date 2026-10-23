@@ -35,7 +35,7 @@ function warning(string $subject): Finding
 test('the doctor walks the generic checks first, then the steps the project adds', function (): void {
     $steps = ['Secrets' => fn (): array => [Finding::ok('Secrets', 'present.')]];
 
-    expect(array_keys(doctor(steps: $steps)->steps()))->toBe(['Local subdomains', 'TLS certificates', 'Docker', 'Local ingress', 'Stack vhosts', 'Secrets'])
+    expect(array_keys(doctor(steps: $steps)->steps()))->toBe(['Local subdomains', 'TLS certificates', 'Docker', 'Local ingress', 'Ingress routes', 'Stack vhosts', 'Secrets'])
         ->and(array_keys(doctor(steps: $steps, withDefaultSteps: false)->steps()))->toBe(['Secrets']);
 });
 

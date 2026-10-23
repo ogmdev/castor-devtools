@@ -22,7 +22,7 @@ final readonly class Environment
 
     private Ingress $ingress;
 
-    public function __construct(?Project $project = null, ?Ingress $ingress = null)
+    public function __construct(?Project $project = null, ?Ingress $ingress = null, private IngressRouting $routing = new IngressRouting)
     {
         $this->project = $project ?? CurrentProject::get();
         $this->ingress = $ingress ?? new Ingress;
@@ -337,6 +337,42 @@ final readonly class Environment
             effort: 'one command, a few seconds',
             documentationUrl: $this->project->troubleshootingDocumentationUrl,
         )];
+    }
+
+    /**
+     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>}>|null  $containers
+     * @return list<Finding>
+     */
+    public function routingFindings(?array $containers = null): array
+    {
+        $containers ??= $this->routing->runningContainers();
+        $findings = [];
+        $unrouted = $this->routing->unroutedContainers($containers);
+        $duplicates = $this->routing->duplicateRoutes($containers);
+
+        if ($duplicates !== []) {
+            $findings[] = new Finding(
+                subject: 'Ingress routes',
+                severity: FindingSeverity::Blocking,
+                detail: sprintf('two projects claim the same route, so the ingress serves only one of them, or neither: %s.', implode('; ', $duplicates)),
+                remedy: 'Prefix every router name with its project name, and give each project its own domain.',
+                effort: 'a label to rename, then a restart of the project',
+                documentationUrl: $this->project->troubleshootingDocumentationUrl,
+            );
+        }
+
+        if ($unrouted !== []) {
+            $findings[] = new Finding(
+                subject: 'Unrouted containers',
+                severity: FindingSeverity::Warning,
+                detail: sprintf('these containers carry Traefik labels the local ingress ignores: %s. A personal compose override often keeps former labels.', implode('; ', $unrouted)),
+                remedy: sprintf('Give them the %s: "true" label and the external %s network, or drop their Traefik labels.', Ingress::EnableLabel, Ingress::Network),
+                effort: 'a few lines of compose, then a restart of the project',
+                documentationUrl: $this->project->troubleshootingDocumentationUrl,
+            );
+        }
+
+        return $findings === [] ? [Finding::ok('Ingress routes', 'every labelled container is routed, and no two projects share a route.')] : $findings;
     }
 
     /**

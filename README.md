@@ -126,7 +126,14 @@ A step returns a list of `Finding`. A finding with `halts: true` stops the walk,
 
 ## The shared ingress
 
-`Ingress::ensureRunning()` starts the `local-ingress` compose project shipped in `ingress/compose.yaml`: Traefik on `127.0.0.1:8000` (http) and `127.0.0.1:8443` (https), attached to the external Docker network `local-ingress`. When the ingress already runs, it is left as is, whichever project started it, with a warning if its revision or data directory differs from this project; `Ingress::restart()` recreates it.
+`Ingress::ensureRunning()` starts the `local-ingress` compose project shipped in `ingress/compose.yaml`: Traefik on `127.0.0.1:8000` (http) and `127.0.0.1:8443` (https), attached to the external Docker network `local-ingress`.
+
+It works the same with one project, several, or any number of them: no project depends on another, none breaks or downgrades the ingress of another.
+
+- The ingress carries the version of the package that started it. A running ingress of the same version or newer is kept as is, whichever project started it; a newer one only adds a warning to update castor-devtools in the project that is behind. An older one is recreated, once, with a message.
+- When another container publishes port 8000 or 8443 (a former project-local Traefik, typically), the start stops before compose and names that container, its compose project and the command that frees the port.
+- The doctor reports the containers that carry Traefik labels the ingress ignores (no opt-in label, or not on the network), and the router names or `Host` rules claimed by two projects.
+- `Ingress::restart()` recreates the ingress on purpose.
 
 Traefik only routes containers that opt in. A project exposes a service by joining the network and labelling it:
 
@@ -145,6 +152,16 @@ networks:
 ```
 
 Prefix router names with the project name: every project shares the same Traefik. A labelled container without router labels gets the Traefik default rule, and one that exposes several ports needs `traefik.http.services.<name>.loadbalancer.server.port`.
+
+### Add a project
+
+1. Pick a domain of its own under `.localhost`, such as `acme.localhost`.
+2. Label each exposed service with `local-ingress.enable: "true"` and its routers, named `<project>-<service>`.
+3. Join those services to the external `local-ingress` network, declared with `external: true`.
+4. Describe the project with `Project` in `castor.php` (name, domain, subdomains, task names), and start it with `Ingress::ensureRunning()` before `DockerCompose::startContainers()`.
+5. Run the TLS task once, then the doctor.
+
+Without Castor, a project still joins the ingress the same way: create the network once with `docker network create local-ingress`, and start the ingress with `docker compose --project-name local-ingress --file ingress/compose.yaml up -d` from a checkout of this package.
 
 `Environment::enableTls()` asks mkcert for a `<domain>` and `*.<domain>` certificate and writes two files named after the domain: the certificate declaration, and a router that redirects that domain only from http to https. Two projects never overwrite each other.
 

@@ -21,11 +21,11 @@ final readonly class Ingress
 
     public const string EnableLabel = 'local-ingress.enable';
 
-    public const string RevisionLabel = 'local-ingress.revision';
+    public const string VersionLabel = 'local-ingress.version';
 
     public const string DataDirectoryLabel = 'local-ingress.data-dir';
 
-    public const string Revision = '2';
+    public const string Version = '0.2.0';
 
     public const string DefaultImage = 'traefik:v3.6';
 
@@ -95,8 +95,8 @@ final readonly class Ingress
 
         $running = $this->runningIngress();
 
-        if ($running !== null) {
-            foreach ($this->runningIngressWarnings($running['revision'], $running['dataDirectory']) as $warning) {
+        if ($running !== null && $this->isUpToDate($running['version'])) {
+            foreach ($this->runningIngressWarnings($running['version'], $running['dataDirectory']) as $warning) {
                 io()->warning($warning);
             }
 
@@ -104,6 +104,15 @@ final readonly class Ingress
         }
 
         $this->ensureNetwork();
+
+        if ($running !== null) {
+            io()->note($this->upgradeMessage($running['version']));
+            $this->up($this->buildRestartCommand());
+
+            return;
+        }
+
+        $this->ensurePortsAreFree();
         $this->up($this->buildUpCommand());
     }
 
@@ -111,7 +120,26 @@ final readonly class Ingress
     {
         $this->ensureDataDirectories();
         $this->ensureNetwork();
+
+        if ($this->runningIngress() === null) {
+            $this->ensurePortsAreFree();
+        }
+
         $this->up($this->buildRestartCommand());
+    }
+
+    public function isUpToDate(string $runningVersion): bool
+    {
+        return $runningVersion !== '' && version_compare($runningVersion, self::Version, '>=');
+    }
+
+    public function upgradeMessage(string $runningVersion): string
+    {
+        return sprintf(
+            'The local ingress runs %s, older than the %s this project ships: recreating it. The other projects keep their routes, they only need a recent castor-devtools to keep it from being recreated again.',
+            $runningVersion === '' ? 'an unversioned release' : 'version '.$runningVersion,
+            self::Version,
+        );
     }
 
     public function isRunning(): bool
@@ -122,16 +150,15 @@ final readonly class Ingress
     /**
      * @return list<string>
      */
-    public function runningIngressWarnings(string $revision, string $dataDirectory): array
+    public function runningIngressWarnings(string $version, string $dataDirectory): array
     {
         $warnings = [];
 
-        if ($revision !== self::Revision) {
+        if ($version !== '' && version_compare($version, self::Version, '>')) {
             $warnings[] = sprintf(
-                'The local ingress runs revision %s, while this project ships revision %s. Restart it once so every project shares the new one: %s',
-                $revision === '' ? 'unknown' : $revision,
-                self::Revision,
-                implode(' ', $this->buildRestartCommand()),
+                'The local ingress runs version %s, newer than the %s this project ships: it is kept as is. Update ogmdev/castor-devtools in this project.',
+                $version,
+                self::Version,
             );
         }
 
@@ -147,7 +174,7 @@ final readonly class Ingress
     }
 
     /**
-     * @return array{revision: string, dataDirectory: string}|null
+     * @return array{version: string, dataDirectory: string}|null
      */
     public function parseRunningIngress(string $output): ?array
     {
@@ -157,9 +184,79 @@ final readonly class Ingress
             return null;
         }
 
-        [$revision, $dataDirectory] = array_pad(explode("\t", $line, 2), 2, '');
+        [$version, $dataDirectory] = array_pad(explode("\t", $line, 2), 2, '');
 
-        return ['revision' => trim($revision), 'dataDirectory' => trim($dataDirectory)];
+        return ['version' => trim($version), 'dataDirectory' => trim($dataDirectory)];
+    }
+
+    /**
+     * @return list<array{name: string, project: string, service: string}>
+     */
+    public function parsePortHolders(string $output): array
+    {
+        $holders = [];
+
+        foreach (explode("\n", trim($output)) as $line) {
+            if (trim($line) === '') {
+                continue;
+            }
+
+            [$name, $project, $service] = array_pad(explode("\t", trim($line), 3), 3, '');
+
+            if ($project !== self::ProjectName) {
+                $holders[] = ['name' => $name, 'project' => $project, 'service' => $service];
+            }
+        }
+
+        return $holders;
+    }
+
+    /**
+     * @param  array<int, list<array{name: string, project: string, service: string}>>  $holdersByPort
+     */
+    public function portConflictMessage(array $holdersByPort): ?string
+    {
+        $lines = [];
+
+        foreach ($holdersByPort as $port => $holders) {
+            foreach ($holders as $holder) {
+                $lines[] = $holder['project'] === ''
+                    ? sprintf('- port %d is published by the container %s: docker stop %s', $port, $holder['name'], $holder['name'])
+                    : sprintf(
+                        '- port %d is published by the container %s of the compose project %s: docker compose --project-name %s stop %s',
+                        $port,
+                        $holder['name'],
+                        $holder['project'],
+                        $holder['project'],
+                        $holder['service'] === '' ? '' : $holder['service'],
+                    );
+            }
+        }
+
+        if ($lines === []) {
+            return null;
+        }
+
+        return implode(PHP_EOL, [
+            sprintf('The local ingress needs 127.0.0.1:%d and 127.0.0.1:%d, shared by every project, and another container holds them:', self::HttpPort, self::HttpsPort),
+            ...array_map(rtrim(...), array_values(array_unique($lines))),
+            'Stop it, move that project to the local ingress (label local-ingress.enable and the external network local-ingress), then start again.',
+        ]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function buildPortHoldersCommand(int $port): array
+    {
+        return [
+            'docker',
+            'ps',
+            '--filter',
+            'publish='.$port,
+            '--format',
+            '{{.Names}}{{"\t"}}{{.Label "com.docker.compose.project"}}{{"\t"}}{{.Label "com.docker.compose.service"}}',
+        ];
     }
 
     public function failureMessage(int $exitCode, string $errorOutput): string
@@ -231,7 +328,7 @@ final readonly class Ingress
             '--filter',
             'label=com.docker.compose.service='.self::Service,
             '--format',
-            sprintf('{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}', self::RevisionLabel, self::DataDirectoryLabel),
+            sprintf('{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}', self::VersionLabel, self::DataDirectoryLabel),
         ];
     }
 
@@ -244,7 +341,7 @@ final readonly class Ingress
     }
 
     /**
-     * @return array{revision: string, dataDirectory: string}|null
+     * @return array{version: string, dataDirectory: string}|null
      */
     private function runningIngress(): ?array
     {
@@ -259,6 +356,22 @@ final readonly class Ingress
             if (! is_dir($directory) && ! @mkdir($directory, 0755, true) && ! is_dir($directory)) {
                 throw new RuntimeException(sprintf('Unable to create the local ingress directory %s.', $directory));
             }
+        }
+    }
+
+    private function ensurePortsAreFree(): void
+    {
+        $holdersByPort = [];
+
+        foreach ([self::HttpPort, self::HttpsPort] as $port) {
+            $process = run($this->buildPortHoldersCommand($port), context()->withAllowFailure()->withQuiet());
+            $holdersByPort[$port] = ($process->getExitCode() ?? 1) === 0 ? $this->parsePortHolders($process->getOutput()) : [];
+        }
+
+        $message = $this->portConflictMessage($holdersByPort);
+
+        if ($message !== null) {
+            throw new RuntimeException($message);
         }
     }
 
