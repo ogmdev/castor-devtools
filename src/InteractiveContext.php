@@ -11,11 +11,11 @@ use function Castor\io;
 
 final readonly class InteractiveContext
 {
-    public static function whenSupported(): Context
+    public static function whenSupported(?Context $context = null): Context
     {
-        $context = context();
+        $context ??= context();
 
-        return $context->supportsInteraction() ? $context->toInteractive() : $context;
+        return $context->supportsInteraction() ? $context->toInteractive()->withAllowFailure(false) : $context;
     }
 
     public static function required(): Context

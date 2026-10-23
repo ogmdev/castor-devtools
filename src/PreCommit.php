@@ -77,6 +77,14 @@ final readonly class PreCommit
     }
 
     /**
+     * @param  list<string>  $installCommand
+     */
+    public function missingPreCommitMessage(array $installCommand): string
+    {
+        return sprintf('pre-commit is required to manage the git hooks: install it (for instance with "%s"), then run the command again.', implode(' ', $installCommand));
+    }
+
+    /**
      * @param  array<string, bool>  $availableCommands
      */
     public function chooseInstallStrategy(array $availableCommands): ?string
@@ -104,7 +112,13 @@ final readonly class PreCommit
             throw new RuntimeException('Unable to install pre-commit: install brew, pipx, python3 or python first.');
         }
 
-        run($this->buildInstallToolCommand($installStrategy), InteractiveContext::whenSupported());
+        $installCommand = $this->buildInstallToolCommand($installStrategy);
+
+        if (! InteractiveContext::confirm(sprintf('pre-commit is missing. Install it now (%s)?', implode(' ', $installCommand)))) {
+            throw new RuntimeException($this->missingPreCommitMessage($installCommand));
+        }
+
+        run($installCommand, InteractiveContext::whenSupported());
 
         $preCommitExecutable = $this->findPreCommitExecutable();
 
@@ -162,7 +176,7 @@ final readonly class PreCommit
 
     private function removeGitHookIfItExists(): void
     {
-        $hookPath = trim(capture('git rev-parse --git-path hooks/pre-commit'));
+        $hookPath = trim(capture('git rev-parse --path-format=absolute --git-path hooks/pre-commit'));
 
         if ($hookPath === '' || ! is_file($hookPath)) {
             return;

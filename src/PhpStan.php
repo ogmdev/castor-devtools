@@ -18,7 +18,7 @@ final readonly class PhpStan
     /**
      * @param  list<string>  $arguments
      */
-    public function run(array $arguments = []): void
+    public function run(array $arguments = []): int
     {
         try {
             if ($arguments !== []) {
@@ -31,8 +31,10 @@ final readonly class PhpStan
                 $this->docker->runOneOffCommandInService($this->docker->phpService(), $command, suppressCastorError: true);
             }
         } catch (CommandFailedException $commandFailedException) {
-            exit($commandFailedException->exitCode);
+            return $commandFailedException->exitCode;
         }
+
+        return 0;
     }
 
     /**

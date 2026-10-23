@@ -8,6 +8,8 @@ use Closure;
 
 final readonly class Project
 {
+    public Tasks $tasks;
+
     /**
      * @param  list<string>  $subdomains
      * @param  array<string, string>  $subdomainPaths
@@ -32,7 +34,6 @@ final readonly class Project
         public ?string $viteSubdomain = 'vite',
         public int $vitePort = 5173,
         public string $nodeImage = 'node:26-alpine',
-        public string $traefikImage = 'traefik:v3.6',
         public array $phpstanCommands = [['composer', 'phpstan']],
         public array $rectorAnalysedPaths = ['app/', 'bootstrap/', 'config/', 'database/', 'routes/', 'tests/'],
         public array $worktreeClonedDirectories = ['vendor', 'public/build'],
@@ -43,7 +44,14 @@ final readonly class Project
         public ?string $setupDocumentationUrl = null,
         public ?string $troubleshootingDocumentationUrl = null,
         public ?Closure $beforeBuild = null,
-    ) {}
+        ?Tasks $tasks = null,
+        public string $containerRoot = Checkout::ContainerRoot,
+        public string $containerShell = 'sh',
+        public string $npmCacheDirectory = 'storage/docker/cache/npm',
+        public ?string $supportContact = null,
+    ) {
+        $this->tasks = $tasks ?? new Tasks;
+    }
 
     public function warnBeforeBuild(): void
     {
@@ -55,6 +63,11 @@ final readonly class Project
     public function nodeContainerName(): string
     {
         return $this->name.'-node';
+    }
+
+    public function task(string $task, string $arguments = ''): string
+    {
+        return $this->tasks->command($task, $arguments);
     }
 
     /**

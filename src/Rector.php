@@ -21,26 +21,28 @@ final readonly class Rector
     /**
      * @param  list<string>  $arguments
      */
-    public function run(array $arguments = []): void
+    public function run(array $arguments = []): int
     {
         try {
             $this->docker->runOneOffCommandInService($this->docker->phpService(), $this->buildCommand($arguments), suppressCastorError: true);
         } catch (CommandFailedException $commandFailedException) {
-            exit($commandFailedException->exitCode);
+            return $commandFailedException->exitCode;
         }
+
+        return 0;
     }
 
-    public function runOnStagedPhpFiles(bool $dryRun = false): void
+    public function runOnStagedPhpFiles(bool $dryRun = false): int
     {
         $stagedPhpFiles = $this->filterPhpFiles($this->git->stagedFiles('*.php'));
 
         if ($stagedPhpFiles === []) {
             io()->note('No staged PHP files to process.');
 
-            return;
+            return 0;
         }
 
-        $this->run([...$this->buildStagedArguments($dryRun), ...$stagedPhpFiles]);
+        return $this->run([...$this->buildStagedArguments($dryRun), ...$stagedPhpFiles]);
     }
 
     /**

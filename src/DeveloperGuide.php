@@ -66,7 +66,7 @@ final readonly class DeveloperGuide
         }
 
         io()->section('Discover more');
-        io()->writeln('  ./castor list');
-        io()->writeln('  ./castor <command> --help');
+        io()->writeln('  '.$this->project->task('list'));
+        io()->writeln('  '.$this->project->task('<command>', '--help'));
     }
 }

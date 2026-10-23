@@ -6,7 +6,6 @@ namespace Ogmdev\CastorDevtools;
 
 use InvalidArgumentException;
 
-use function Castor\capture;
 use function Castor\run;
 
 final readonly class Assets
@@ -33,15 +32,16 @@ final readonly class Assets
             run(['docker', 'pull', $this->project->nodeImage]);
         }
 
-        (new Node($this->projectDirectory, $this->project))->stopRunningContainer();
+        $node = new Node($this->projectDirectory, $this->project);
+        $node->stopRunningContainer();
 
-        run($this->buildDockerRunCommand($action, $clean, capture('id -u')), InteractiveContext::whenSupported());
+        run($this->buildDockerRunCommand($action, $clean, $node->hostUser()), InteractiveContext::whenSupported());
     }
 
     /**
      * @return list<string>
      */
-    public function buildDockerRunCommand(string $action, bool $clean = false, string $userId = '1000'): array
+    public function buildDockerRunCommand(string $action, bool $clean = false, string $user = '1000:1000'): array
     {
         $this->assertSupportedAction($action);
         $node = new Node($this->projectDirectory, $this->project);
@@ -49,7 +49,7 @@ final readonly class Assets
         return $node->buildDockerRunCommand([
             $node->buildNpmShellCommand(['ci']),
             $node->buildNpmShellCommand(['run', $action]),
-        ], $clean, $userId, $action === 'dev' ? $this->environment->viteContainerOptions() : []);
+        ], $clean, $user, $action === 'dev' ? $this->environment->viteContainerOptions() : []);
     }
 
     public function buildAssetShellCommand(string $action, bool $clean = false): string

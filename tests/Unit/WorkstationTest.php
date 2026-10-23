@@ -6,17 +6,17 @@ use Ogmdev\CastorDevtools\Checkout;
 use Ogmdev\CastorDevtools\Node;
 use Ogmdev\CastorDevtools\WorktreeSetup;
 
-test('npm runs in a throwaway node container named after the project, without publishing a port', function (): void {
+test('npm runs in a throwaway node container named after the project, as the host user and group, without publishing a port', function (): void {
     $node = new Node('/home/dev/acme', sampleProject());
-    $command = $node->buildDockerRunCommand([$node->buildNpmShellCommand(['audit'])], clean: true, userId: '1234');
+    $command = $node->buildDockerRunCommand([$node->buildNpmShellCommand(['audit'])], clean: true, user: '1234:20');
 
     expect($command)->toBe([
-        'docker', 'run', '--rm', '--name', 'acme-node', '-u1234',
+        'docker', 'run', '--rm', '--name', 'acme-node', '--user=1234:20',
         '-e', 'SHELL=/bin/sh',
         '-e', 'npm_config_cache=/var/www/html/storage/docker/cache/npm/',
         '-v', '/home/dev/acme:/var/www/html',
         'node:26-alpine',
-        'sh', '-c', "cd /var/www/html && rm -fr node_modules && 'npm' 'audit'",
+        'sh', '-c', "cd '/var/www/html' && rm -fr node_modules && 'npm' 'audit'",
     ])
         ->and($node->buildStopCommand())->toBe(['docker', 'stop', 'acme-node']);
 });
@@ -63,4 +63,14 @@ test('worktree setup only brings what the main checkout has and the worktree lac
     expect($setup->directoriesToClone($worktree))->toBe([])
         ->and($setup->filesToCopy($worktree))->toBe([])
         ->and($setup->symlinksToCreate($worktree))->toBe([]);
+});
+
+test('the node container follows the configured container root and npm cache', function (): void {
+    $node = new Node('/home/dev/acme', sampleProject(['containerRoot' => '/app/', 'npmCacheDirectory' => '/.cache/npm/']));
+
+    expect($node->buildDockerRunCommand([$node->buildNpmShellCommand(['ci'])], clean: false))->toContain(
+        'npm_config_cache=/app/.cache/npm/',
+        '/home/dev/acme:/app',
+        "cd '/app' && 'npm' 'ci'",
+    );
 });

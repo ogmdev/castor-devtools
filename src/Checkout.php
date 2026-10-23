@@ -66,7 +66,7 @@ final readonly class Checkout
     public static function outsideMainCheckoutMessage(string $topLevel, string $mainDirectory): string
     {
         return sprintf(
-            'The worktree %s lives outside the main checkout %s: the containers only mount the main checkout. Create the worktree under %s/.claude/worktrees/.',
+            'The worktree %s lives outside the main checkout %s: the containers only mount the main checkout. Create the worktree inside %s.',
             $topLevel,
             $mainDirectory,
             $mainDirectory,
@@ -83,9 +83,11 @@ final readonly class Checkout
         return $this->worktreePath === null ? $this->mainDirectory : $this->mainDirectory.'/'.$this->worktreePath;
     }
 
-    public function containerWorkingDirectory(): string
+    public function containerWorkingDirectory(string $containerRoot = self::ContainerRoot): string
     {
-        return $this->worktreePath === null ? self::ContainerRoot : self::ContainerRoot.'/'.$this->worktreePath;
+        $containerRoot = rtrim($containerRoot, '/');
+
+        return $this->worktreePath === null ? $containerRoot : $containerRoot.'/'.$this->worktreePath;
     }
 
     /**
@@ -99,7 +101,7 @@ final readonly class Checkout
     /**
      * @return list<string>
      */
-    public function containerOptions(): array
+    public function containerOptions(string $containerRoot = self::ContainerRoot): array
     {
         if ($this->worktreePath === null || $this->worktreeGitDirectoryPath === null) {
             return [];
@@ -107,11 +109,11 @@ final readonly class Checkout
 
         return [
             '-w',
-            $this->containerWorkingDirectory(),
+            $this->containerWorkingDirectory($containerRoot),
             '-e',
-            'GIT_DIR='.self::ContainerRoot.'/'.$this->worktreeGitDirectoryPath,
+            'GIT_DIR='.rtrim($containerRoot, '/').'/'.$this->worktreeGitDirectoryPath,
             '-e',
-            'GIT_WORK_TREE='.$this->containerWorkingDirectory(),
+            'GIT_WORK_TREE='.$this->containerWorkingDirectory($containerRoot),
         ];
     }
 }

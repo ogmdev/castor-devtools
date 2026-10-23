@@ -7,6 +7,7 @@ namespace Ogmdev\CastorDevtools;
 use RuntimeException;
 
 use function Castor\context;
+use function Castor\exit_code;
 use function Castor\run;
 
 final readonly class DockerCompose
@@ -162,7 +163,7 @@ final readonly class DockerCompose
         $this->ensureDockerDaemonIsRunning();
         $this->ensureServiceIsRunning($service);
 
-        run($this->buildExecCommand($service, ['zsh'], true, $environment), $context);
+        run($this->buildExecCommand($service, [$this->project->containerShell], true, $environment), $context);
     }
 
     /**
@@ -251,7 +252,7 @@ final readonly class DockerCompose
      */
     private function buildContainerOptions(string $service): array
     {
-        return $this->mountsProjectAsWorkingDirectory($service) ? $this->checkout->containerOptions() : [];
+        return $this->mountsProjectAsWorkingDirectory($service) ? $this->checkout->containerOptions($this->project->containerRoot) : [];
     }
 
     /**
@@ -290,23 +291,25 @@ final readonly class DockerCompose
     {
         return implode(PHP_EOL, [
             'Docker does not seem to be running or reachable.',
-            'Start Docker Desktop or OrbStack, then run the Castor command again.',
+            'Start the Docker engine (Docker Desktop, OrbStack, Colima, or the docker service on Linux), then run the command again.',
         ]);
     }
 
     public function serviceStartFailedMessage(string $service): string
     {
         return sprintf(
-            'Docker is reachable, but the service "%s" could not be started. Run "./castor docker:start", then run the command again.',
+            'Docker is reachable, but the service "%s" could not be started. Run "%s", then run the command again.',
             $service,
+            $this->project->task($this->project->tasks->start),
         );
     }
 
     public function serviceStillStoppedMessage(string $service): string
     {
         return sprintf(
-            'The Docker service "%s" is still stopped after the automatic start. Check it with "./castor docker:status".',
+            'The Docker service "%s" is still stopped after the automatic start. Check it with "%s".',
             $service,
+            $this->project->task($this->project->tasks->status),
         );
     }
 
@@ -445,7 +448,7 @@ final readonly class DockerCompose
      */
     private function commandExitCode(array $command): int
     {
-        return run($command, context()->withAllowFailure()->withQuiet())->getExitCode() ?? 1;
+        return exit_code($command, context()->withQuiet());
     }
 
     /**

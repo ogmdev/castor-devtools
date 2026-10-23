@@ -12,7 +12,7 @@ services:
       - --providers.file.directory=/etc/traefik/dynamic
       - --providers.file.watch=true
       - --entrypoints.web.address=:80
-      - --entrypoints.web.forwardedheaders.insecure=true
+      - --entrypoints.web.forwardedheaders.insecure=${LOCAL_INGRESS_TRUST_FORWARDED_HEADERS:-false}
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls=true
       - --api.dashboard=true
@@ -20,13 +20,15 @@ services:
       - "127.0.0.1:8000:80"
       - "127.0.0.1:8443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${LOCAL_INGRESS_DATA_DIR:-${HOME}/.local/share/local-ingress}/dynamic:/etc/traefik/dynamic:ro
-      - ${LOCAL_INGRESS_DATA_DIR:-${HOME}/.local/share/local-ingress}/certs:/etc/traefik/certs:ro
+      - ${LOCAL_INGRESS_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+      - ${LOCAL_INGRESS_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/local-ingress}/dynamic:/etc/traefik/dynamic:ro
+      - ${LOCAL_INGRESS_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/local-ingress}/certs:/etc/traefik/certs:ro
     networks:
       - local-ingress
     labels:
       local-ingress.enable: "true"
+      local-ingress.revision: "2"
+      local-ingress.data-dir: ${LOCAL_INGRESS_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/local-ingress}
       traefik.http.routers.local-ingress-dashboard.rule: Host(`ingress.localhost`)
       traefik.http.routers.local-ingress-dashboard.entrypoints: web
       traefik.http.routers.local-ingress-dashboard.service: api@internal

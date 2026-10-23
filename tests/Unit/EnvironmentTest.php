@@ -64,7 +64,7 @@ test('each project redirects only its own domain, so two projects never collide 
     $other = environment(['domain' => 'other.localhost'])->buildHttpsRedirectConfig();
 
     expect($acme)->toContain('https-redirect-acme-localhost:')
-        ->and($acme)->toContain('rule: HostRegexp(`^(?:.+\.)?acme\.localhost$`)')
+        ->and($acme)->toContain('rule: HostRegexp(`^(?:[^.]+\.)?acme\.localhost$`)')
         ->and($acme)->toContain('entryPoints: [web]')
         ->and($acme)->toContain('service: noop@internal')
         ->and($acme)->toContain('port: "8443"')
@@ -73,14 +73,15 @@ test('each project redirects only its own domain, so two projects never collide 
         ->and($other)->not()->toContain('acme');
 });
 
-test('the redirect host pattern matches the project subdomains and nothing else', function (): void {
+test('the redirect host pattern matches the domain and the one level of subdomains the certificate covers', function (): void {
     preg_match('/HostRegexp\(`(.+)`\)/', environment()->buildHttpsRedirectConfig(), $rule);
     $pattern = '/'.($rule[1] ?? 'no rule').'/';
 
     expect(preg_match($pattern, 'app.acme.localhost'))->toBe(1)
         ->and(preg_match($pattern, 'acme.localhost'))->toBe(1)
         ->and(preg_match($pattern, 'app.notacme.localhost'))->toBe(0)
-        ->and(preg_match($pattern, 'acme.localhost.evil'))->toBe(0);
+        ->and(preg_match($pattern, 'acme.localhost.evil'))->toBe(0)
+        ->and(preg_match($pattern, 'a.b.acme.localhost'))->toBe(0);
 });
 
 test('tls counts as configured only when the four files exist', function (): void {
@@ -107,7 +108,7 @@ test('hosts detection ignores comments and names that only contain a subdomain',
 
 test('the vite dev server joins the shared network, opts in and is routed by its project name', function (): void {
     $directory = temporaryDirectory('castor-devtools-assets');
-    $command = (new Assets($directory, environmentWithTls(true), sampleProject()))->buildDockerRunCommand('dev', userId: '1234');
+    $command = (new Assets($directory, environmentWithTls(true), sampleProject()))->buildDockerRunCommand('dev', user: '1234:1234');
     $image = array_search('node:26-alpine', $command, true);
 
     expect(array_slice($command, (int) $image - 12, 12))->toBe([
@@ -131,8 +132,9 @@ test('without certificates the vite dev server is served over http like the page
 test('mkcert install advice and command match the workstation platform', function (): void {
     $environment = environment();
 
-    expect($environment->mkcertInstallAdvice(true, 'Darwin'))->toContain('apt install mkcert libnss3-tools')
+    expect($environment->mkcertInstallAdvice(true, 'Linux'))->toContain('apt install mkcert libnss3-tools', '"castor env:tls"')
         ->and($environment->mkcertInstallAdvice(false, 'Darwin'))->toContain('brew install mkcert')
+        ->and($environment->mkcertInstallAdvice(false, 'Linux', hasApt: false))->toContain('your package manager', 'github.com/FiloSottile/mkcert')
         ->and($environment->mkcertInstallAdvice(false, 'Windows'))->toContain('github.com/FiloSottile/mkcert')
         ->and($environment->mkcertInstallCommand(false, 'Linux', hasApt: true, hasBrew: false))->toBe(['sudo', 'apt-get', 'install', '-y', 'mkcert', 'libnss3-tools'])
         ->and($environment->mkcertInstallCommand(false, 'Darwin', hasApt: false, hasBrew: true))->toBe(['brew', 'install', 'mkcert'])
@@ -146,7 +148,7 @@ test('wsl detection and advices route the mkcert authority and the hosts to wind
         ->and($environment->detectsWsl('Linux version 6.8.0-45-generic'))->toBeFalse()
         ->and($environment->windowsHostsAdvice())->toContain('C:\Windows\System32\drivers\etc\hosts')
         ->and($environment->wslForwardingAdvice())->toContain('wsl --shutdown')
-        ->and($environment->wslCertificateTrustAdvice())->toContain('certutil.exe -addstore -f ROOT', 'mkcert -CAROOT')
+        ->and($environment->wslCertificateTrustAdvice())->toContain('certutil.exe -user -addstore -f Root', 'wslpath -w', 'mkcert -CAROOT')
         ->and($environment->buildWindowsUserStoreImportCommand('C:\rootCA.pem'))->toBe(['certutil.exe', '-user', '-addstore', '-f', 'Root', 'C:\rootCA.pem']);
 });
 
@@ -171,6 +173,6 @@ test('the tls findings report missing certificates as blocking with the remedy',
     [$present] = environmentWithTls(true)->tlsFindings();
 
     expect($missing->needsAction())->toBeTrue()
-        ->and($missing->remedy)->toContain('./castor env:tls')
+        ->and($missing->remedy)->toContain('"castor env:tls"')
         ->and($present->needsAction())->toBeFalse();
 });

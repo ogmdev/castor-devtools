@@ -93,7 +93,7 @@ final readonly class WorktreeSetup
     public function notAWorktreeMessage(): string
     {
         return sprintf(
-            '%s is the main checkout, there is nothing to prepare. Run this task from a worktree created under %s/.claude/worktrees/.',
+            '%s is the main checkout, there is nothing to prepare. Run this task from a git worktree created inside %s.',
             $this->checkout->mainDirectory,
             $this->checkout->mainDirectory,
         );

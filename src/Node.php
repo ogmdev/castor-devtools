@@ -30,7 +30,7 @@ final readonly class Node
 
         $this->stopRunningContainer();
 
-        $command = $this->buildDockerRunCommand([$this->buildNpmShellCommand($arguments)], $clean, capture('id -u'));
+        $command = $this->buildDockerRunCommand([$this->buildNpmShellCommand($arguments)], $clean, $this->hostUser());
 
         if ($interactive) {
             run($command, InteractiveContext::whenSupported());
@@ -116,12 +116,17 @@ final readonly class Node
         return ['run', 'lint'];
     }
 
+    public function hostUser(): string
+    {
+        return sprintf('%s:%s', trim(capture('id -u')), trim(capture('id -g')));
+    }
+
     /**
      * @param  list<string>  $commands
      * @param  list<string>  $options
      * @return list<string>
      */
-    public function buildDockerRunCommand(array $commands, bool $clean, string $userId = '1000', array $options = []): array
+    public function buildDockerRunCommand(array $commands, bool $clean, string $user = '1000:1000', array $options = []): array
     {
         return [
             'docker',
@@ -129,13 +134,13 @@ final readonly class Node
             '--rm',
             '--name',
             $this->project->nodeContainerName(),
-            sprintf('-u%s', $userId),
+            sprintf('--user=%s', $user),
             '-e',
             'SHELL=/bin/sh',
             '-e',
-            sprintf('npm_config_cache=%s/storage/docker/cache/npm/', Checkout::ContainerRoot),
+            sprintf('npm_config_cache=%s/%s/', $this->containerRoot(), trim($this->project->npmCacheDirectory, '/')),
             '-v',
-            sprintf('%s:%s', $this->projectDirectory, Checkout::ContainerRoot),
+            sprintf('%s:%s', $this->projectDirectory, $this->containerRoot()),
             ...$options,
             $this->project->nodeImage,
             'sh',
@@ -149,13 +154,18 @@ final readonly class Node
      */
     public function buildShellCommand(array $commands, bool $clean): string
     {
-        $steps = [sprintf('cd %s', Checkout::ContainerRoot)];
+        $steps = [sprintf('cd %s', escapeshellarg($this->containerRoot()))];
 
         if ($clean) {
             $steps[] = 'rm -fr node_modules';
         }
 
         return implode(' && ', [...$steps, ...$commands]);
+    }
+
+    private function containerRoot(): string
+    {
+        return rtrim($this->project->containerRoot, '/');
     }
 
     /**

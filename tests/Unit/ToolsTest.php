@@ -2,17 +2,20 @@
 
 declare(strict_types=1);
 
+use Castor\Context;
 use Ogmdev\CastorDevtools\Checkout;
 use Ogmdev\CastorDevtools\Completion;
 use Ogmdev\CastorDevtools\Composer;
 use Ogmdev\CastorDevtools\DeveloperGuide;
 use Ogmdev\CastorDevtools\DockerCompose;
 use Ogmdev\CastorDevtools\Git;
+use Ogmdev\CastorDevtools\InteractiveContext;
 use Ogmdev\CastorDevtools\Laravel;
 use Ogmdev\CastorDevtools\PhpStan;
 use Ogmdev\CastorDevtools\Pint;
 use Ogmdev\CastorDevtools\PreCommit;
 use Ogmdev\CastorDevtools\Rector;
+use Ogmdev\CastorDevtools\Tasks;
 
 function mainCompose(): DockerCompose
 {
@@ -93,4 +96,36 @@ test('only the interactive context guard switches a castor context to interactiv
         expect(basename($file) === 'InteractiveContext.php' || ! str_contains($source, '->toInteractive('))->toBeTrue(basename($file))
             ->and(str_contains($source, '->withTty('))->toBeFalse(basename($file));
     }
+});
+
+test('an interactive context keeps the terminal but still fails the task on a failed command', function (): void {
+    $interactive = InteractiveContext::whenSupported(new Context(workingDirectory: '/tmp', supportsInteraction: true));
+    $headless = InteractiveContext::whenSupported(new Context(workingDirectory: '/tmp', supportsInteraction: false));
+
+    expect($interactive->tty)->toBeTrue()
+        ->and($interactive->timeout)->toBeNull()
+        ->and($interactive->allowFailure)->toBeFalse()
+        ->and($headless->tty)->toBeFalse()
+        ->and($headless->allowFailure)->toBeFalse();
+});
+
+test('quality tools hand their exit code back to the castor task instead of exiting', function (): void {
+    foreach (['PhpStan', 'Pint', 'Rector'] as $tool) {
+        $source = (string) file_get_contents(dirname(__DIR__, 2).'/src/'.$tool.'.php');
+
+        expect($source)->not()->toContain('exit(')
+            ->and($source)->toContain('public function run(array $arguments = []): int');
+    }
+});
+
+test('the messages name the tasks of the project, never a hard-coded executable or task list', function (): void {
+    foreach (glob(dirname(__DIR__, 2).'/src/*.php') ?: [] as $file) {
+        expect((string) file_get_contents($file))->not()->toContain('./castor', basename($file));
+    }
+
+    $tasks = new Tasks(executable: './castor', start: 'stack:up');
+
+    expect($tasks->command($tasks->start))->toBe('./castor stack:up')
+        ->and((new Tasks)->command('env:tls'))->toBe('castor env:tls')
+        ->and($tasks->command('docker:logs', '--service=php'))->toBe('./castor docker:logs --service=php');
 });

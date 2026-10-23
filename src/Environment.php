@@ -7,6 +7,7 @@ namespace Ogmdev\CastorDevtools;
 use RuntimeException;
 
 use function Castor\context;
+use function Castor\exit_code;
 use function Castor\io;
 use function Castor\parallel;
 use function Castor\run;
@@ -24,7 +25,7 @@ final readonly class Environment
     public function __construct(?Project $project = null, ?Ingress $ingress = null)
     {
         $this->project = $project ?? CurrentProject::get();
-        $this->ingress = $ingress ?? new Ingress($this->project->traefikImage);
+        $this->ingress = $ingress ?? new Ingress;
     }
 
     public function enableTls(): void
@@ -44,8 +45,8 @@ final readonly class Environment
             '*.'.$this->project->domain,
         ]);
 
-        file_put_contents($this->tlsDynamicFile(), $this->buildTlsDynamicConfig());
-        file_put_contents($this->redirectFile(), $this->buildHttpsRedirectConfig());
+        $this->writeFile($this->tlsDynamicFile(), $this->buildTlsDynamicConfig());
+        $this->writeFile($this->redirectFile(), $this->buildHttpsRedirectConfig());
 
         io()->success(sprintf('TLS enabled on the local ingress for *.%s: port %d now redirects to https, like a production edge.', $this->project->domain, Ingress::HttpPort));
 
@@ -110,8 +111,9 @@ final readonly class Environment
     public function tlsDirectoryOwnershipAdvice(array $directories): string
     {
         return sprintf(
-            'Certificate directories are not writable: %s. Docker creates missing bind-mount sources as root on the first "docker compose up". Take them back, then run ./castor env:tls again: sudo chown -R "$(id -u):$(id -g)" %s',
+            'Certificate directories are not writable: %s. Docker creates missing bind-mount sources as root on the first "docker compose up". Take them back, then run "%s" again: sudo chown -R "$(id -u):$(id -g)" %s',
             implode(', ', $directories),
+            $this->project->task($this->project->tasks->tls),
             implode(' ', $directories),
         );
     }
@@ -133,7 +135,9 @@ final readonly class Environment
 
         try {
             if ($this->isTlsConfigured()) {
-                $this->trustCertificateAuthorities();
+                if ($this->isWsl()) {
+                    $this->trustCertificateAuthorityOnWindows(quietWhenTrusted: true);
+                }
 
                 return;
             }
@@ -150,20 +154,25 @@ final readonly class Environment
             return;
         }
 
-        throw new RuntimeException('The local ingress is not running, so no vhost would serve the Vite dev server. Run "./castor docker:start", then run the command again.');
+        throw new RuntimeException(sprintf(
+            'The local ingress is not running, so no vhost would serve the Vite dev server. Run "%s", then run the command again.',
+            $this->project->task($this->project->tasks->start),
+        ));
     }
 
-    public function mkcertInstallAdvice(bool $wsl, string $osFamily): string
+    public function mkcertInstallAdvice(bool $wsl, string $osFamily, bool $hasApt = true): string
     {
-        if ($wsl || $osFamily === 'Linux') {
-            return 'mkcert is required for local TLS: sudo apt install mkcert libnss3-tools, then ./castor env:tls.';
-        }
+        $then = sprintf('then "%s"', $this->project->task($this->project->tasks->tls));
 
         if ($osFamily === 'Darwin') {
-            return 'mkcert is required for local TLS: brew install mkcert, then ./castor env:tls.';
+            return sprintf('mkcert is required for local TLS: brew install mkcert, %s.', $then);
         }
 
-        return 'mkcert is required for local TLS: https://github.com/FiloSottile/mkcert#installation, then ./castor env:tls.';
+        if (($wsl || $osFamily === 'Linux') && $hasApt) {
+            return sprintf('mkcert is required for local TLS: sudo apt install mkcert libnss3-tools, %s.', $then);
+        }
+
+        return sprintf('mkcert is required for local TLS: install it with your package manager (https://github.com/FiloSottile/mkcert#installation), %s.', $then);
     }
 
     /**
@@ -224,7 +233,7 @@ final readonly class Environment
 
     public function wslCertificateTrustAdvice(): string
     {
-        return 'WSL workstation: the mkcert authority lives in Linux. For Windows browsers, find its folder with "mkcert -CAROOT", then from an administrator PowerShell: certutil.exe -addstore -f ROOT "\\\\wsl$\\<distribution>\\<CAROOT folder>\\rootCA.pem".';
+        return 'WSL workstation: the mkcert authority lives in Linux. For Windows browsers, import it into the Windows user store from this shell: certutil.exe -user -addstore -f Root "$(wslpath -w "$(mkcert -CAROOT)/rootCA.pem")"';
     }
 
     public function buildTlsDynamicConfig(): string
@@ -242,7 +251,7 @@ final readonly class Environment
         return "http:\n"
             ."  routers:\n"
             ."    {$name}:\n"
-            .'      rule: HostRegexp(`^(?:.+\.)?'.preg_quote($this->project->domain, '/')."$`)\n"
+            .'      rule: HostRegexp(`^(?:[^.]+\.)?'.preg_quote($this->project->domain, '/')."$`)\n"
             ."      entryPoints: [web]\n"
             ."      priority: 1000\n"
             ."      middlewares: [{$name}]\n"
@@ -275,10 +284,10 @@ final readonly class Environment
 
         io()->writeln($tls
             ? sprintf('Port %d redirects to these addresses, like a production edge.', Ingress::HttpPort)
-            : sprintf('TLS is required but inactive: ./castor env:tls enables https and the redirect of port %d.', Ingress::HttpPort));
+            : sprintf('TLS is inactive: "%s" enables https and the redirect of port %d.', $this->project->task($this->project->tasks->tls), Ingress::HttpPort));
 
         if ($this->project->viteSubdomain !== null) {
-            io()->writeln(sprintf('%s only answers while "./castor assets:dev" runs.', $this->project->viteSubdomain));
+            io()->writeln(sprintf('%s only answers while "%s" runs.', $this->project->viteSubdomain, $this->project->task($this->project->tasks->assetsDev)));
         }
 
         io()->writeln(sprintf('Ingress dashboard: %s', Ingress::DashboardUrl));
@@ -314,6 +323,25 @@ final readonly class Environment
     /**
      * @return list<Finding>
      */
+    public function ingressFindings(): array
+    {
+        if ($this->ingress->isRunning()) {
+            return [Finding::ok('Local ingress', sprintf('running, dashboard on %s.', Ingress::DashboardUrl))];
+        }
+
+        return [new Finding(
+            subject: 'Local ingress',
+            severity: FindingSeverity::Blocking,
+            detail: sprintf('the shared Traefik is stopped: nothing answers on ports %d and %d.', Ingress::HttpPort, Ingress::HttpsPort),
+            remedy: sprintf('Start it with "%s".', $this->project->task($this->project->tasks->start)),
+            effort: 'one command, a few seconds',
+            documentationUrl: $this->project->troubleshootingDocumentationUrl,
+        )];
+    }
+
+    /**
+     * @return list<Finding>
+     */
     public function hostsFindings(): array
     {
         $missing = $this->missingFromHostsFile((string) @file_get_contents('/etc/hosts'));
@@ -326,7 +354,7 @@ final readonly class Environment
             subject: 'Local subdomains',
             severity: FindingSeverity::Warning,
             detail: sprintf('missing from /etc/hosts: %s. Browsers resolve *.localhost on their own, tools using the system resolver do not.', implode(', ', $missing)),
-            remedy: 'Declare them with "./castor env:hosts".',
+            remedy: sprintf('Declare them with "%s".', $this->project->task($this->project->tasks->hosts)),
             effort: 'one command, a few seconds',
             documentationUrl: $this->project->setupDocumentationUrl,
         )];
@@ -345,7 +373,7 @@ final readonly class Environment
             subject: 'TLS certificates',
             severity: FindingSeverity::Blocking,
             detail: 'mkcert certificates are missing: the https URLs do not answer.',
-            remedy: 'Generate them with "./castor env:tls".',
+            remedy: sprintf('Generate them with "%s".', $this->project->task($this->project->tasks->tls)),
             effort: 'one command, a minute the first time',
             documentationUrl: $this->project->setupDocumentationUrl,
         )];
@@ -361,7 +389,7 @@ final readonly class Environment
                 subject: 'Stack vhosts',
                 severity: FindingSeverity::Unknown,
                 detail: 'not checked: without a certificate the https URLs cannot answer. This is not an extra problem.',
-                remedy: 'Come back to this point after "./castor env:tls".',
+                remedy: sprintf('Come back to this point after "%s".', $this->project->task($this->project->tasks->tls)),
                 documentationUrl: $this->project->troubleshootingDocumentationUrl,
             )];
         }
@@ -387,8 +415,8 @@ final readonly class Environment
                 ? 'no subdomain answers: the stack is not running.'
                 : sprintf('no answer from: %s.', implode(', ', $unreachable)),
             remedy: $allDown
-                ? 'Start the stack with "./castor docker:start".'
-                : 'Inspect the service with "./castor docker:status", then "./castor docker:logs --service=...".',
+                ? sprintf('Start the stack with "%s".', $this->project->task($this->project->tasks->start))
+                : sprintf('Inspect the service with "%s", then "%s".', $this->project->task($this->project->tasks->status), $this->project->task($this->project->tasks->logs, '--service=...')),
             effort: $allDown ? 'one command, a few minutes on the first start' : 'a few minutes',
             documentationUrl: $this->project->troubleshootingDocumentationUrl,
         )];
@@ -400,28 +428,32 @@ final readonly class Environment
 
         io()->writeln($this->ingress->isRunning()
             ? sprintf('Local ingress: running (%s).', Ingress::DashboardUrl)
-            : 'Local ingress: stopped, start it with ./castor docker:start.');
+            : sprintf('Local ingress: stopped, start it with "%s".', $this->project->task($this->project->tasks->start)));
 
         $missing = $this->missingFromHostsFile((string) @file_get_contents('/etc/hosts'));
         io()->writeln($missing === []
             ? '/etc/hosts: every subdomain is declared.'
-            : 'Declare with ./castor env:hosts: '.implode(', ', $missing));
+            : sprintf('Declare with "%s": %s', $this->project->task($this->project->tasks->hosts), implode(', ', $missing)));
 
+        $tls = $this->isTlsConfigured();
+
+        io()->writeln($tls
+            ? sprintf('Port %d, expected 301 everywhere:', Ingress::HttpPort)
+            : sprintf('Port %d:', Ingress::HttpPort));
         $this->showProbes($this->serviceUrl(...), $this->buildHttpCheckCommand(...));
 
         if ($this->isWsl()) {
             io()->writeln($this->wslForwardingAdvice());
         }
 
-        if (! $this->isTlsConfigured()) {
-            io()->warning('TLS is required but inactive: run ./castor env:tls (mkcert certificates are missing).');
+        if (! $tls) {
+            io()->warning(sprintf('TLS is inactive: run "%s" (mkcert certificates are missing).', $this->project->task($this->project->tasks->tls)));
 
             return;
         }
 
+        io()->writeln(sprintf('Port %d:', Ingress::HttpsPort));
         $this->showProbes($this->httpsServiceUrl(...), $this->buildHttpsCheckCommand(...));
-
-        io()->writeln(sprintf('Expected: 301 everywhere on port %d.', Ingress::HttpPort));
     }
 
     public function detectsWsl(string $procVersion): bool
@@ -646,14 +678,6 @@ final readonly class Environment
         return trim(run($command, context()->withAllowFailure()->withQuiet())->getOutput());
     }
 
-    /**
-     * @param  list<string>  $command
-     */
-    private function probeExitCode(array $command): int
-    {
-        return run($command, context()->withAllowFailure()->withQuiet())->getExitCode() ?? 1;
-    }
-
     private function describeStatus(string $status): string
     {
         return $status === '' || $status === '000' ? 'unreachable' : 'HTTP '.$status;
@@ -664,18 +688,26 @@ final readonly class Environment
         return (string) preg_replace('/[^a-z0-9]+/', '-', strtolower($this->project->domain));
     }
 
+    private function writeFile(string $path, string $contents): void
+    {
+        if (file_put_contents($path, $contents) === false) {
+            throw new RuntimeException(sprintf('Unable to write %s.', $path));
+        }
+    }
+
     private function ensureMkcertInstalled(): void
     {
         if ($this->isMkcertAvailable()) {
             return;
         }
 
-        $advice = $this->mkcertInstallAdvice($this->isWsl(), PHP_OS_FAMILY);
+        $hasApt = $this->hasBinary('apt-get');
+        $advice = $this->mkcertInstallAdvice($this->isWsl(), PHP_OS_FAMILY, $hasApt);
 
         $command = $this->mkcertInstallCommand(
             $this->isWsl(),
             PHP_OS_FAMILY,
-            $this->hasBinary('apt-get'),
+            $hasApt,
             $this->hasBinary('brew'),
         );
 
@@ -732,19 +764,6 @@ final readonly class Environment
         ));
     }
 
-    private function trustCertificateAuthorities(): void
-    {
-        if (! $this->isMkcertAvailable()) {
-            return;
-        }
-
-        $this->trustLocalCertificateAuthority();
-
-        if ($this->isWsl()) {
-            $this->trustCertificateAuthorityOnWindows();
-        }
-    }
-
     private function trustLocalCertificateAuthority(): void
     {
         $process = run(['mkcert', '-install'], InteractiveContext::whenSupported()->withAllowFailure());
@@ -756,7 +775,7 @@ final readonly class Environment
         io()->warning('The mkcert authority could not be added to the local trust stores: run "mkcert -install", otherwise browsers will reject the certificate.');
     }
 
-    private function trustCertificateAuthorityOnWindows(): void
+    private function trustCertificateAuthorityOnWindows(bool $quietWhenTrusted = false): void
     {
         $pemPath = $this->certificateAuthorityPemPath();
 
@@ -778,7 +797,9 @@ final readonly class Environment
         $store = run($this->buildWindowsRootStoreQueryCommand(), context()->withAllowFailure()->withQuiet());
 
         if ($fingerprint !== null && $this->isWindowsCaTrusted($store->getOutput(), $fingerprint)) {
-            io()->writeln('The mkcert authority is already in the Windows user store: Windows browsers trust the vhosts.');
+            if (! $quietWhenTrusted) {
+                io()->writeln('The mkcert authority is already in the Windows user store: Windows browsers trust the vhosts.');
+            }
 
             return;
         }
@@ -821,11 +842,11 @@ final readonly class Environment
      */
     private function isMkcertAvailable(): bool
     {
-        return $this->probeExitCode(['mkcert', '-version']) === 0;
+        return exit_code(['mkcert', '-version'], context()->withQuiet()) === 0;
     }
 
     private function hasBinary(string $binary): bool
     {
-        return $this->probeExitCode(['sh', '-c', 'command -v '.escapeshellarg($binary)]) === 0;
+        return exit_code(['sh', '-c', 'command -v '.escapeshellarg($binary)], context()->withQuiet()) === 0;
     }
 }

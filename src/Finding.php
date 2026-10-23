@@ -35,6 +35,6 @@ final readonly class Finding
 
     public function shareLine(): string
     {
-        return sprintf('- [%s] %s : %s', $this->severity->label(), $this->subject, $this->detail);
+        return sprintf('- [%s] %s: %s', $this->severity->label(), $this->subject, $this->detail);
     }
 }

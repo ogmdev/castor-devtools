@@ -19,7 +19,7 @@ final readonly class Completion
         $target = $this->completionTargetPath($shell);
 
         $this->ensureDirectory(dirname($target));
-        file_put_contents($target, $this->generateCompletionScript($shell));
+        $this->writeFile($target, $this->generateCompletionScript($shell));
 
         if ($shell === 'zsh' && $configure) {
             $this->configureZsh();
@@ -83,7 +83,14 @@ ZSH;
             return;
         }
 
-        file_put_contents($zshrc, rtrim($currentContent).$block.PHP_EOL);
+        $this->writeFile($zshrc, rtrim($currentContent).$block.PHP_EOL);
+    }
+
+    private function writeFile(string $path, string $contents): void
+    {
+        if (file_put_contents($path, $contents) === false) {
+            throw new InvalidArgumentException(sprintf('Unable to write %s.', $path));
+        }
     }
 
     private function ensureDirectory(string $directory): void

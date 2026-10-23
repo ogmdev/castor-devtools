@@ -13,15 +13,17 @@ final readonly class Pint
     /**
      * @param  list<string>  $arguments
      */
-    public function run(array $arguments = []): void
+    public function run(array $arguments = []): int
     {
         io()->note($this->git->describeWorkingTree());
 
         try {
             $this->docker->runOneOffCommandInService($this->docker->phpService(), $this->buildCommand($arguments), suppressCastorError: true);
         } catch (CommandFailedException $commandFailedException) {
-            exit($commandFailedException->exitCode);
+            return $commandFailedException->exitCode;
         }
+
+        return 0;
     }
 
     /**
