@@ -205,6 +205,8 @@ export default defineConfig({
 
 The containers mount the main checkout only, so a worktree must live inside it (any ignored directory will do). Tasks run from the worktree then drive the main stack on the worktree files, and `WorktreeSetup` clones `vendor` and copies `.env` from the main checkout.
 
+Compose runs with the main checkout as project directory and the worktree's compose file, plus the personal override of the main checkout when the worktree has none. A `COMPOSE_FILE` chain is kept in order, each file taken from the worktree when it has a copy. Build contexts and relative paths still resolve against the main checkout, and the stack is shared: the last checkout to start it decides the topology.
+
 ## Development
 
 ```bash

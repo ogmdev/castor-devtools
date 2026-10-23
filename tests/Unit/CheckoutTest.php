@@ -68,3 +68,34 @@ test('compose commands built from a worktree target the main project and the wor
         'docker', 'compose', '--project-directory', '/home/dev/acme', 'exec', '-T', 'nginx', 'nginx', '-s', 'reload',
     ]);
 });
+
+test('a worktree loads its own compose file with the personal override of the main checkout', function (): void {
+    $main = temporaryDirectory('checkout');
+    $worktree = $main.'/.claude/worktrees/feature';
+    mkdir($worktree, 0777, true);
+    touch($main.'/docker-compose.yml');
+    touch($main.'/docker-compose.override.yml');
+    touch($worktree.'/docker-compose.yml');
+
+    $checkout = Checkout::fromGitPaths($main.'/.git', $main.'/.git/worktrees/feature', $worktree);
+
+    expect($checkout->composeOptions())->toBe([
+        '--project-directory', $main, '-f', $worktree.'/docker-compose.yml', '-f', $main.'/docker-compose.override.yml',
+    ]);
+});
+
+test('a compose file chain set in the main .env keeps its order and takes each file from the worktree when it has one', function (): void {
+    $main = temporaryDirectory('checkout');
+    $worktree = $main.'/.claude/worktrees/feature';
+    mkdir($worktree.'/docker', 0777, true);
+    file_put_contents($main.'/.env', "APP_ENV=local\nCOMPOSE_FILE=\"docker-compose.yml:docker/ci.yml:docker-compose.local.yml\"\n");
+    touch($worktree.'/docker-compose.yml');
+    touch($worktree.'/docker/ci.yml');
+
+    $checkout = Checkout::fromGitPaths($main.'/.git', $main.'/.git/worktrees/feature', $worktree);
+
+    expect($checkout->composeOptions())->toBe([
+        '--project-directory', $main,
+        '-f', $worktree.'/docker-compose.yml', '-f', $worktree.'/docker/ci.yml', '-f', $main.'/docker-compose.local.yml',
+    ]);
+})->skip(getenv('COMPOSE_FILE') !== false, 'COMPOSE_FILE is exported in this shell and takes precedence over the .env');
