@@ -114,8 +114,8 @@ final readonly class DoctorDisplay
             $lines = [...$lines, ...$this->entryLines($key, $value)];
         }
 
-        $last = array_key_last($lines);
-        $lines[$last] = (string) preg_replace('/'.self::CardSide.'/u', self::CardBottom, $lines[$last], 1);
+        $last = array_pop($lines);
+        $lines[] = (string) preg_replace('/'.self::CardSide.'/u', self::CardBottom, $last, 1);
 
         return $lines;
     }
