@@ -224,4 +224,4 @@ This package is not affiliated with JoliCode or Traefik Labs. Traefik is a trade
 
 ## License
 
-MIT
+Apache-2.0, see [LICENSE](LICENSE). Versions up to v0.1.1 were published under the MIT license.

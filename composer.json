@@ -2,7 +2,7 @@
     "name": "ogmdev/castor-devtools",
     "description": "Castor building blocks to drive a Docker Compose web stack: compose commands, git worktrees, quality tools, Vite, an environment doctor, and one local Traefik ingress with mkcert TLS shared by every project.",
     "type": "library",
-    "license": "MIT",
+    "license": "Apache-2.0",
     "keywords": [
         "castor",
         "docker",
