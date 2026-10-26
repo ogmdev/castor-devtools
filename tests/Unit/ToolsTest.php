@@ -14,8 +14,9 @@ use Ogmdev\CastorDevtools\Laravel;
 use Ogmdev\CastorDevtools\PhpStan;
 use Ogmdev\CastorDevtools\Pint;
 use Ogmdev\CastorDevtools\PreCommit;
+use Ogmdev\CastorDevtools\Project;
 use Ogmdev\CastorDevtools\Rector;
-use Ogmdev\CastorDevtools\Symfony;
+use Ogmdev\CastorDevtools\SymfonyApp;
 use Ogmdev\CastorDevtools\Tasks;
 
 function mainCompose(): DockerCompose
@@ -35,14 +36,55 @@ test('the test run clears the config cache then runs the suite in parallel', fun
     ]);
 });
 
-test('the symfony console runs in the configured php service', function (): void {
-    expect((new Symfony(mainCompose()))->buildConsoleCommand(['debug:router']))->toBe(['docker', 'compose', 'exec', '-T', 'php-app', 'php', 'bin/console', 'debug:router']);
+test('the symfony console runs in the configured php service, with a terminal on request', function (): void {
+    expect((new SymfonyApp(mainCompose()))->buildConsoleCommand(['debug:router']))->toBe(['docker', 'compose', 'exec', '-T', 'php-app', 'php', 'bin/console', 'debug:router'])
+        ->and((new SymfonyApp(mainCompose()))->buildConsoleCommand(['make:entity'], tty: true))->toBe(['docker', 'compose', 'exec', 'php-app', 'php', 'bin/console', 'make:entity']);
 });
 
 test('the symfony test run forwards its arguments to phpunit', function (): void {
-    expect((new Symfony(mainCompose()))->buildTestCommands(['--filter=SomeTest']))->toBe([
-        ['php', 'bin/phpunit', '--filter=SomeTest'],
+    expect((new SymfonyApp(mainCompose()))->buildTestCommands())->toBe([['php', 'bin/phpunit']])
+        ->and((new SymfonyApp(mainCompose()))->buildTestCommands(['--filter=SomeTest']))->toBe([
+            ['php', 'bin/phpunit', '--filter=SomeTest'],
+        ]);
+});
+
+test('the project test commands replace the framework ones, the arguments going to the last one', function (): void {
+    $docker = new DockerCompose(sampleProject(['testCommands' => [['php', 'bin/console', 'cache:clear', '--env=test'], ['vendor/bin/pest']]]), Checkout::main('/home/dev/acme'));
+
+    expect((new SymfonyApp($docker))->buildTestCommands(['--parallel']))->toBe([
+        ['php', 'bin/console', 'cache:clear', '--env=test'],
+        ['vendor/bin/pest', '--parallel'],
+    ])->and((new Laravel($docker))->buildTestCommands())->toBe([
+        ['php', 'bin/console', 'cache:clear', '--env=test'],
+        ['vendor/bin/pest'],
     ]);
+});
+
+test('the symfony preset replaces the laravel defaults and keeps explicit options', function (): void {
+    $project = Project::symfony(name: 'acme', domain: 'acme.localhost', subdomains: ['app'], phpService: 'frankenphp', projectMountedServicePrefixes: ['frankenphp']);
+
+    expect($project->name)->toBe('acme')
+        ->and($project->subdomains)->toBe(['app'])
+        ->and($project->phpService)->toBe('frankenphp')
+        ->and($project->viteSubdomain)->toBeNull()
+        ->and($project->containerRoot)->toBe('/app')
+        ->and($project->npmCacheDirectory)->toBe('var/docker/cache/npm')
+        ->and($project->phpstanCommands)->toBe([['vendor/bin/phpstan', 'analyse', '--memory-limit=512M', '--no-progress']])
+        ->and($project->worktreeClonedDirectories)->toBe(['vendor', 'assets/vendor'])
+        ->and($project->worktreeCopiedFiles)->toBe(['.env.local'])
+        ->and($project->testCommands)->toBeNull()
+        ->and(Project::symfony('acme', 'acme.localhost', ['app'], containerRoot: '/var/www/html')->containerRoot)->toBe('/var/www/html');
+});
+
+test('the symfony console of a worktree runs in the worktree under the frankenphp root', function (): void {
+    $checkout = Checkout::fromGitPaths('/home/dev/acme/.git', '/home/dev/acme/.git/worktrees/feature', '/home/dev/acme/.claude/worktrees/feature');
+    $docker = new DockerCompose(Project::symfony('acme', 'acme.localhost', ['app']), $checkout);
+
+    expect((new SymfonyApp($docker))->buildConsoleCommand(['about']))->toContain(
+        '/app/.claude/worktrees/feature',
+        'GIT_DIR=/app/.git/worktrees/feature',
+        'GIT_WORK_TREE=/app/.claude/worktrees/feature',
+    )->and(array_slice((new SymfonyApp($docker))->buildConsoleCommand(['about']), -4))->toBe(['php', 'php', 'bin/console', 'about']);
 });
 
 test('pint formats dirty files by default and forwards explicit arguments', function (): void {

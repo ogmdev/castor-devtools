@@ -12,7 +12,7 @@ final readonly class IngressRouting
     private const string RouterLabel = '/^traefik\.http\.routers\.([^.]+)\.rule$/';
 
     /**
-     * @return list<array{name: string, project: string, labels: array<string, string>, networks: list<string>}>
+     * @return list<array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}>
      */
     public function runningContainers(): array
     {
@@ -28,7 +28,7 @@ final readonly class IngressRouting
     }
 
     /**
-     * @return list<array{name: string, project: string, labels: array<string, string>, networks: list<string>}>
+     * @return list<array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}>
      */
     public function parseInspect(string $json): array
     {
@@ -57,6 +57,7 @@ final readonly class IngressRouting
                 'project' => $labels['com.docker.compose.project'] ?? '',
                 'labels' => $labels,
                 'networks' => array_values(array_filter(array_keys($networks), is_string(...))),
+                'health' => is_string($container['State']['Health']['Status'] ?? null) ? $container['State']['Health']['Status'] : '',
             ];
         }
 
@@ -64,7 +65,7 @@ final readonly class IngressRouting
     }
 
     /**
-     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>}>  $containers
+     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}>  $containers
      * @return list<string>
      */
     public function unroutedContainers(array $containers): array
@@ -95,7 +96,30 @@ final readonly class IngressRouting
     }
 
     /**
-     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>}>  $containers
+     * Traefik skips a container until its healthcheck passes: its vhosts answer 404 meanwhile.
+     *
+     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}>  $containers
+     * @return array<string, 'starting'|'unhealthy'>
+     */
+    public function skippedUnhealthyContainers(array $containers): array
+    {
+        $skipped = [];
+
+        foreach ($containers as $container) {
+            if ($container['project'] === Ingress::ProjectName || ! $this->isRouted($container)) {
+                continue;
+            }
+
+            if ($container['health'] === 'starting' || $container['health'] === 'unhealthy') {
+                $skipped[$this->describe($container)] = $container['health'];
+            }
+        }
+
+        return $skipped;
+    }
+
+    /**
+     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}>  $containers
      * @return list<string>
      */
     public function duplicateRoutes(array $containers): array
@@ -140,7 +164,7 @@ final readonly class IngressRouting
     }
 
     /**
-     * @param  array{name: string, project: string, labels: array<string, string>, networks: list<string>}  $container
+     * @param  array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}  $container
      */
     private function isRouted(array $container): bool
     {
@@ -148,7 +172,7 @@ final readonly class IngressRouting
     }
 
     /**
-     * @param  array{name: string, project: string, labels: array<string, string>, networks: list<string>}  $container
+     * @param  array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}  $container
      */
     private function describe(array $container): string
     {

@@ -340,7 +340,7 @@ final readonly class Environment
     }
 
     /**
-     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>}>|null  $containers
+     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}>|null  $containers
      * @return list<Finding>
      */
     public function routingFindings(?array $containers = null): array
@@ -349,6 +349,7 @@ final readonly class Environment
         $findings = [];
         $unrouted = $this->routing->unroutedContainers($containers);
         $duplicates = $this->routing->duplicateRoutes($containers);
+        $skipped = $this->routing->skippedUnhealthyContainers($containers);
 
         if ($duplicates !== []) {
             $findings[] = new Finding(
@@ -357,6 +358,23 @@ final readonly class Environment
                 detail: sprintf('two projects claim the same route, so the ingress serves only one of them, or neither: %s.', implode('; ', $duplicates)),
                 remedy: 'Prefix every router name with its project name, and give each project its own domain.',
                 effort: 'a label to rename, then a restart of the project',
+                documentationUrl: $this->project->troubleshootingDocumentationUrl,
+            );
+        }
+
+        if ($skipped !== []) {
+            $unhealthy = in_array('unhealthy', $skipped, true);
+            $findings[] = new Finding(
+                subject: 'Unhealthy containers',
+                severity: $unhealthy ? FindingSeverity::Blocking : FindingSeverity::Warning,
+                detail: sprintf(
+                    'Traefik routes a container only once its healthcheck passes, so their vhosts answer 404: %s.',
+                    implode('; ', array_map(static fn (string $container, string $health): string => sprintf('%s (%s)', $container, $health), array_keys($skipped), $skipped)),
+                ),
+                remedy: $unhealthy
+                    ? sprintf('Read why the healthcheck fails with "%s".', $this->project->task($this->project->tasks->logs, '--service=...'))
+                    : sprintf('Wait for the first healthcheck, or shorten it with healthcheck.start_interval in compose, then check "%s".', $this->project->task($this->project->tasks->status)),
+                effort: $unhealthy ? 'a few minutes' : 'up to the healthcheck interval, 30 seconds by default',
                 documentationUrl: $this->project->troubleshootingDocumentationUrl,
             );
         }
@@ -372,7 +390,7 @@ final readonly class Environment
             );
         }
 
-        return $findings === [] ? [Finding::ok('Ingress routes', 'every labelled container is routed, and no two projects share a route.')] : $findings;
+        return $findings === [] ? [Finding::ok('Ingress routes', 'every labelled container is routed and healthy, and no two projects share a route.')] : $findings;
     }
 
     /**

@@ -22,6 +22,11 @@ final readonly class DockerCompose
         $this->checkout = $checkout ?? CurrentCheckout::get();
     }
 
+    public function project(): Project
+    {
+        return $this->project;
+    }
+
     public function phpService(): string
     {
         return $this->project->phpService;
