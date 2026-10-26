@@ -93,9 +93,19 @@ test('a compose file chain set in the main .env keeps its order and takes each f
     touch($worktree.'/docker/ci.yml');
 
     $checkout = Checkout::fromGitPaths($main.'/.git', $main.'/.git/worktrees/feature', $worktree);
+    $exported = getenv('COMPOSE_FILE');
+    putenv('COMPOSE_FILE');
 
-    expect($checkout->composeOptions())->toBe([
+    try {
+        $composeOptions = $checkout->composeOptions();
+    } finally {
+        if ($exported !== false) {
+            putenv('COMPOSE_FILE='.$exported);
+        }
+    }
+
+    expect($composeOptions)->toBe([
         '--project-directory', $main,
         '-f', $worktree.'/docker-compose.yml', '-f', $worktree.'/docker/ci.yml', '-f', $main.'/docker-compose.local.yml',
     ]);
-})->skip(getenv('COMPOSE_FILE') !== false, 'COMPOSE_FILE is exported in this shell and takes precedence over the .env');
+});
