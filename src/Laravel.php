@@ -4,18 +4,14 @@ declare(strict_types=1);
 
 namespace Ogmdev\CastorDevtools;
 
-use function Castor\io;
-
-final readonly class Laravel
+final readonly class Laravel extends Framework
 {
-    public function __construct(private DockerCompose $docker = new DockerCompose, private Git $git = new Git) {}
-
     /**
      * @param  list<string>  $arguments
      */
-    public function runArtisanCommand(array $arguments): void
+    public function runArtisanCommand(array $arguments, bool $tty = true): void
     {
-        $this->docker->runCommandInService($this->docker->phpService(), ['php', 'artisan', ...$arguments]);
+        $this->runConsoleCommand($arguments, $tty);
     }
 
     /**
@@ -23,29 +19,12 @@ final readonly class Laravel
      */
     public function captureArtisanCommand(array $arguments): string
     {
-        return $this->docker->captureCommandInService($this->docker->phpService(), ['php', 'artisan', ...$arguments]);
+        return $this->captureConsoleCommand($arguments);
     }
 
     public function clearLaravelCache(): void
     {
-        $this->runArtisanCommand(['optimize:clear']);
-    }
-
-    /**
-     * @param  list<string>  $arguments
-     */
-    public function runTests(array $arguments = []): void
-    {
-        io()->note($this->git->describeWorkingTree());
-
-        foreach ($this->buildTestCommands($arguments) as $command) {
-            $this->docker->runCommandInService($this->docker->phpService(), $command);
-        }
-    }
-
-    public function openPhpShell(): void
-    {
-        $this->docker->openShellInService($this->docker->phpService());
+        $this->clearCache();
     }
 
     /**
@@ -54,18 +33,24 @@ final readonly class Laravel
      */
     public function buildArtisanCommand(array $arguments): array
     {
-        return $this->docker->buildExecCommand($this->docker->phpService(), ['php', 'artisan', ...$arguments]);
+        return $this->buildConsoleCommand($arguments);
     }
 
-    /**
-     * @param  list<string>  $arguments
-     * @return list<list<string>>
-     */
-    public function buildTestCommands(array $arguments = []): array
+    protected function consoleCommand(): array
+    {
+        return ['php', 'artisan'];
+    }
+
+    protected function cacheClearArguments(): array
+    {
+        return ['optimize:clear'];
+    }
+
+    protected function defaultTestCommands(): array
     {
         return [
             ['php', 'artisan', 'config:clear', '--ansi'],
-            ['php', 'artisan', 'test', '--compact', '--parallel', ...$arguments],
+            ['php', 'artisan', 'test', '--compact', '--parallel'],
         ];
     }
 }

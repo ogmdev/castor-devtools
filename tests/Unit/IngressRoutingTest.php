@@ -12,10 +12,11 @@ use Ogmdev\CastorDevtools\IngressRouting;
  * @param  list<string>  $networks
  * @return array<string, mixed>
  */
-function inspected(string $name, string $project, array $labels, array $networks = ['local-ingress']): array
+function inspected(string $name, string $project, array $labels, array $networks = ['local-ingress'], ?string $health = null): array
 {
     return [
         'Name' => '/'.$name,
+        'State' => $health === null ? ['Status' => 'running'] : ['Status' => 'running', 'Health' => ['Status' => $health]],
         'Config' => ['Labels' => [...($project === '' ? [] : ['com.docker.compose.project' => $project]), ...$labels]],
         'NetworkSettings' => ['Networks' => array_fill_keys($networks, ['NetworkID' => 'x'])],
     ];
@@ -35,7 +36,7 @@ function routed(string $router, string $rule): array
 
 /**
  * @param  list<array<string, mixed>>  $containers
- * @return list<array{name: string, project: string, labels: array<string, string>, networks: list<string>}>
+ * @return list<array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}>
  */
 function containers(array $containers): array
 {
@@ -48,6 +49,7 @@ test('docker inspect is read into names, compose projects, labels and networks',
         'project' => 'acme',
         'labels' => ['com.docker.compose.project' => 'acme', ...routed('acme-app', 'Host(`app.acme.localhost`)')],
         'networks' => ['acme_default', 'local-ingress'],
+        'health' => '',
     ]])
         ->and((new IngressRouting)->parseInspect('not json'))->toBe([]);
 });
@@ -97,4 +99,22 @@ test('the routing findings block on shared routes, warn on unrouted containers, 
         ->and(array_map(static fn ($finding): FindingSeverity => $finding->severity, $broken))->toBe([FindingSeverity::Blocking, FindingSeverity::Warning])
         ->and($broken[0]->detail)->toContain('the router app')
         ->and($broken[1]->detail)->toContain('saas-nginx-1', 'compose override');
+});
+
+test('routed containers whose healthcheck has not passed are reported, blocking when unhealthy', function (): void {
+    $environment = new Environment(sampleProject(), new Ingress(dataDirectory: '/data'));
+    $containers = containers([
+        inspected('acme-php-1', 'acme', routed('acme-app', 'Host(`app.acme.localhost`)'), health: 'starting'),
+        inspected('acme-api-1', 'acme', routed('acme-api', 'Host(`api.acme.localhost`)'), health: 'healthy'),
+        inspected('saas-php-1', 'saas', ['traefik.http.routers.saas.rule' => 'Host(`saas.localhost`)'], ['saas_default'], 'unhealthy'),
+    ]);
+
+    $starting = $environment->routingFindings($containers);
+    $unhealthy = $environment->routingFindings(containers([inspected('acme-php-1', 'acme', routed('acme-app', 'Host(`app.acme.localhost`)'), health: 'unhealthy')]));
+
+    expect((new IngressRouting)->skippedUnhealthyContainers($containers))->toBe(['acme-php-1 of the project acme' => 'starting'])
+        ->and($starting[0]->severity)->toBe(FindingSeverity::Warning)
+        ->and($starting[0]->detail)->toContain('404', 'acme-php-1 of the project acme (starting)')
+        ->and($unhealthy)->toHaveCount(1)
+        ->and($unhealthy[0]->severity)->toBe(FindingSeverity::Blocking);
 });

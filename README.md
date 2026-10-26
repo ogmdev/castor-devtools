@@ -1,9 +1,9 @@
 # castor-devtools
 
-Building blocks for [Castor](https://castor.jolicode.com) task files that drive a web application running in Docker Compose (Laravel by default, every path configurable):
+Building blocks for [Castor](https://castor.jolicode.com) task files that drive a web application running in Docker Compose (Laravel by default, Symfony supported, every path configurable):
 
 - compose commands that work from the main checkout and from git worktrees;
-- Composer, Artisan, Pest, Pint, PHPStan and Rector run in the PHP container;
+- Composer, Artisan or the Symfony console, Pest or PHPUnit, Pint, PHPStan and Rector run in the PHP container;
 - npm and Vite in a throwaway Node container;
 - **one local Traefik ingress shared by every project on the workstation**, with mkcert TLS, `*.localhost` subdomains and an http → https redirect, so each application runs on production-like hostnames;
 - `/etc/hosts` management, an environment doctor, and a walking elephant while it checks.
@@ -71,11 +71,11 @@ function doctor(): int
 }
 ```
 
-Every option of `Project` but `name`, `domain` and `subdomains` has a default:
+Every option of `Project` but `name`, `domain` and `subdomains` has a default, the Laravel one (`Project::symfony()` starts from the Symfony ones):
 
 | Option | Default | Use |
 |---|---|---|
-| `phpService` | `php` | compose service that runs Composer, Artisan and the quality tools |
+| `phpService` | `php` | compose service that runs Composer, the framework console and the quality tools |
 | `nginxServicesByPhpService` | `[]` | nginx services reloaded after their PHP service restarts |
 | `projectMountedServicePrefixes` | `['php']` | services that mount the project, and so receive the worktree directory |
 | `containerRoot` | `/var/www/html` | where the services and the Node container mount the project |
@@ -84,6 +84,7 @@ Every option of `Project` but `name`, `domain` and `subdomains` has a default:
 | `nodeImage` | `node:26-alpine` | throwaway Node container |
 | `npmCacheDirectory` | `storage/docker/cache/npm` | npm cache, relative to `containerRoot` |
 | `phpstanCommands`, `rectorAnalysedPaths` | Laravel paths | quality tools |
+| `testCommands` | `null` | commands of `runTests()`, `null` for those of the framework class |
 | `worktreeClonedDirectories`, `worktreeCopiedFiles`, `worktreeSymlinks` | `vendor`, `public/build`, `.env` | what `WorktreeSetup` brings from the main checkout |
 | `tasks` | `new Tasks` | task names the messages tell the developer to run |
 | `supportContact` | `null` | who the doctor sends the developer to, if anyone |
@@ -107,6 +108,58 @@ The package defines no task: `castor.php` does. The messages name the tasks to r
 | `doctor` | `dev:doctor` |
 
 `PhpStan::run()`, `Pint::run()` and `Rector::run()` return the exit code of the tool: return it from the task, so Castor exits with it.
+
+## Laravel and Symfony
+
+`Laravel` drives Artisan and Pest, `SymfonyApp` drives `bin/console` and `bin/phpunit`, both in the PHP service and through the same methods:
+
+| Method | Laravel | Symfony |
+|---|---|---|
+| `runConsoleCommand()`, `captureConsoleCommand()`, `buildConsoleCommand()` | `php artisan …` | `php bin/console …` |
+| `clearCache()` | `php artisan optimize:clear` | `php bin/console cache:clear` |
+| `runTests()`, `buildTestCommands()` | `php artisan config:clear`, then `php artisan test --compact --parallel …` | `php bin/phpunit …` |
+| `openPhpShell()` | the container shell | the container shell |
+
+`runConsoleCommand()` allocates a terminal when Castor runs in one, so the console stays interactive: MakerBundle and Laravel Prompts ask their questions, and `doctrine:fixtures:load` or `migrate` ask before they purge or migrate. Pass `tty: false` for a command whose output a script reads. `Laravel` keeps `runArtisanCommand()`, `captureArtisanCommand()`, `buildArtisanCommand()` and `clearLaravelCache()` as aliases.
+
+`testCommands` on `Project` replaces the default test commands, for Pest on Symfony or `vendor/bin/phpunit` without a Flex recipe: the arguments of `runTests()` go to the last one.
+
+The class is not named `Symfony`: imported in a task file, a class of that name would capture every `Symfony\…` name written there.
+
+### A Symfony project
+
+`Project::symfony()` starts from the Symfony defaults instead of the Laravel ones:
+
+```php
+CurrentProject::use(Project::symfony(
+    name: 'acme',
+    domain: 'acme.localhost',
+    subdomains: ['app'],
+));
+```
+
+| Option | Symfony default |
+|---|---|
+| `viteSubdomain` | `null`: AssetMapper needs no dev server |
+| `containerRoot` | `/app`, the working directory of the official FrankenPHP image |
+| `phpstanCommands` | `vendor/bin/phpstan analyse --memory-limit=512M --no-progress` |
+| `rectorAnalysedPaths` | `src/`, `config/`, `tests/` |
+| `worktreeClonedDirectories`, `worktreeCopiedFiles` | `vendor`, `assets/vendor`, `.env.local` |
+| `npmCacheDirectory` | `var/docker/cache/npm`, ignored with `var/` |
+
+Every other named argument of `Project` overrides them, `containerRoot: '/var/www/html'` for an nginx and PHP-FPM stack for instance. A FrankenPHP service serves the application on its own, without nginx: leave `nginxServicesByPhpService` empty.
+
+Set `SERVER_NAME=:80` on the FrankenPHP service, so it serves plain http behind the ingress, which terminates TLS, and trust the ingress as a proxy so Symfony generates https URLs: Traefik gets a new address on the `local-ingress` network each time it is recreated, so trust `private_ranges` (Symfony 7.2 or later) in `framework.trusted_proxies` rather than one address.
+
+The official FrankenPHP image declares a healthcheck without an interval, and Traefik routes a container only once it reports healthy: the vhosts answer 404 for the first 30 seconds after each start, Docker's default interval. Probe sooner from the start (Docker Engine 25 or later); the doctor names the containers still waiting:
+
+```yaml
+services:
+  php:
+    healthcheck:
+      start_period: 60s
+      start_interval: 1s
+```
 
 ## The doctor
 
@@ -176,7 +229,7 @@ The ingress belongs to the workstation, not to a project, so its settings are en
 
 Traefik reads the Docker socket to discover the containers. Mounted read-only or not, the socket gives full access to the Docker engine: the ingress only listens on the loopback, and routes on the `Host` header only.
 
-The dashboard answers on http://ingress.localhost:8000/dashboard/. Port 8000 is also the default of `php artisan serve`: stop it before starting the ingress.
+The dashboard answers on http://ingress.localhost:8000/dashboard/. Port 8000 is also the default of `php artisan serve` and `symfony server:start`: stop them before starting the ingress.
 
 ## Vite through the ingress
 

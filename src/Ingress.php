@@ -263,7 +263,7 @@ final readonly class Ingress
     {
         if (str_contains($errorOutput, 'port is already allocated') || str_contains($errorOutput, 'address already in use')) {
             return sprintf(
-                'The local ingress cannot listen on 127.0.0.1:%d and 127.0.0.1:%d: another process already uses one of these ports (a former Traefik, "php artisan serve"...). Free them, then start again.',
+                'The local ingress cannot listen on 127.0.0.1:%d and 127.0.0.1:%d: another process already uses one of these ports (a former Traefik, "php artisan serve", "symfony server:start"...). Free them, then start again.',
                 self::HttpPort,
                 self::HttpsPort,
             );

@@ -18,6 +18,7 @@ final readonly class Project
      * @param  list<list<string>>  $phpstanCommands
      * @param  list<string>  $rectorAnalysedPaths
      * @param  list<string>  $worktreeClonedDirectories
+     * @param  non-empty-list<list<string>>|null  $testCommands
      * @param  list<string>  $worktreeCopiedFiles
      * @param  array<string, string>  $worktreeSymlinks
      * @param  array<string, list<string>>  $guideSections
@@ -36,6 +37,7 @@ final readonly class Project
         public string $nodeImage = 'node:26-alpine',
         public array $phpstanCommands = [['composer', 'phpstan']],
         public array $rectorAnalysedPaths = ['app/', 'bootstrap/', 'config/', 'database/', 'routes/', 'tests/'],
+        public ?array $testCommands = null,
         public array $worktreeClonedDirectories = ['vendor', 'public/build'],
         public array $worktreeCopiedFiles = ['.env'],
         public array $worktreeSymlinks = [],
@@ -51,6 +53,28 @@ final readonly class Project
         public ?string $supportContact = null,
     ) {
         $this->tasks = $tasks ?? new Tasks;
+    }
+
+    /**
+     * The Symfony defaults: AssetMapper without a dev server, a FrankenPHP service working in /app, Symfony paths. Any other option overrides them, by name.
+     *
+     * @param  list<string>  $subdomains
+     */
+    public static function symfony(string $name, string $domain, array $subdomains, mixed ...$options): self
+    {
+        return new self(...[
+            'viteSubdomain' => null,
+            'phpstanCommands' => [['vendor/bin/phpstan', 'analyse', '--memory-limit=512M', '--no-progress']],
+            'rectorAnalysedPaths' => ['src/', 'config/', 'tests/'],
+            'worktreeClonedDirectories' => ['vendor', 'assets/vendor'],
+            'worktreeCopiedFiles' => ['.env.local'],
+            'containerRoot' => '/app',
+            'npmCacheDirectory' => 'var/docker/cache/npm',
+            ...$options,
+            'name' => $name,
+            'domain' => $domain,
+            'subdomains' => $subdomains,
+        ]);
     }
 
     public function warnBeforeBuild(): void
