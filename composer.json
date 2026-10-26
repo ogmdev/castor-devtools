@@ -10,6 +10,7 @@
         "traefik",
         "mkcert",
         "laravel",
+        "symfony",
         "developer-experience"
     ],
     "require": {

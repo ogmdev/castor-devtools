@@ -15,6 +15,7 @@ use Ogmdev\CastorDevtools\PhpStan;
 use Ogmdev\CastorDevtools\Pint;
 use Ogmdev\CastorDevtools\PreCommit;
 use Ogmdev\CastorDevtools\Rector;
+use Ogmdev\CastorDevtools\Symfony;
 use Ogmdev\CastorDevtools\Tasks;
 
 function mainCompose(): DockerCompose
@@ -31,6 +32,16 @@ test('the test run clears the config cache then runs the suite in parallel', fun
     expect((new Laravel(mainCompose()))->buildTestCommands(['--filter=SomeTest']))->toBe([
         ['php', 'artisan', 'config:clear', '--ansi'],
         ['php', 'artisan', 'test', '--compact', '--parallel', '--filter=SomeTest'],
+    ]);
+});
+
+test('the symfony console runs in the configured php service', function (): void {
+    expect((new Symfony(mainCompose()))->buildConsoleCommand(['debug:router']))->toBe(['docker', 'compose', 'exec', '-T', 'php-app', 'php', 'bin/console', 'debug:router']);
+});
+
+test('the symfony test run forwards its arguments to phpunit', function (): void {
+    expect((new Symfony(mainCompose()))->buildTestCommands(['--filter=SomeTest']))->toBe([
+        ['php', 'bin/phpunit', '--filter=SomeTest'],
     ]);
 });
 

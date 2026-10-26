@@ -1,9 +1,9 @@
 # castor-devtools
 
-Building blocks for [Castor](https://castor.jolicode.com) task files that drive a web application running in Docker Compose (Laravel by default, every path configurable):
+Building blocks for [Castor](https://castor.jolicode.com) task files that drive a web application running in Docker Compose (Laravel by default, Symfony supported, every path configurable):
 
 - compose commands that work from the main checkout and from git worktrees;
-- Composer, Artisan, Pest, Pint, PHPStan and Rector run in the PHP container;
+- Composer, Artisan or the Symfony console, Pest or PHPUnit, Pint, PHPStan and Rector run in the PHP container;
 - npm and Vite in a throwaway Node container;
 - **one local Traefik ingress shared by every project on the workstation**, with mkcert TLS, `*.localhost` subdomains and an http → https redirect, so each application runs on production-like hostnames;
 - `/etc/hosts` management, an environment doctor, and a walking elephant while it checks.
@@ -75,7 +75,7 @@ Every option of `Project` but `name`, `domain` and `subdomains` has a default:
 
 | Option | Default | Use |
 |---|---|---|
-| `phpService` | `php` | compose service that runs Composer, Artisan and the quality tools |
+| `phpService` | `php` | compose service that runs Composer, Artisan or the Symfony console, and the quality tools |
 | `nginxServicesByPhpService` | `[]` | nginx services reloaded after their PHP service restarts |
 | `projectMountedServicePrefixes` | `['php']` | services that mount the project, and so receive the worktree directory |
 | `containerRoot` | `/var/www/html` | where the services and the Node container mount the project |
@@ -107,6 +107,36 @@ The package defines no task: `castor.php` does. The messages name the tasks to r
 | `doctor` | `dev:doctor` |
 
 `PhpStan::run()`, `Pint::run()` and `Rector::run()` return the exit code of the tool: return it from the task, so Castor exits with it.
+
+## Symfony
+
+`Laravel` drives Artisan and Pest; `Symfony` drives `bin/console` and `bin/phpunit` the same way, in the PHP service:
+
+| Method | Runs |
+|---|---|
+| `runConsoleCommand()`, `captureConsoleCommand()` | `php bin/console …` |
+| `clearSymfonyCache()` | `php bin/console cache:clear` |
+| `runTests()` | `php bin/phpunit …` |
+| `openPhpShell()` | the container shell |
+
+A Symfony project overrides the Laravel defaults of `Project`:
+
+```php
+CurrentProject::use(new Project(
+    name: 'acme',
+    domain: 'acme.localhost',
+    subdomains: ['app'],
+    viteSubdomain: null,
+    phpstanCommands: [['vendor/bin/phpstan', 'analyse', '--no-progress']],
+    rectorAnalysedPaths: ['src/', 'config/', 'tests/'],
+    worktreeClonedDirectories: ['vendor', 'assets/vendor'],
+    worktreeCopiedFiles: ['.env.local'],
+));
+```
+
+`viteSubdomain: null` fits AssetMapper, which needs no dev server. A FrankenPHP service serves the application on its own, without nginx: leave `nginxServicesByPhpService` empty and point `containerRoot` at the image working directory (`/app` for the official image).
+
+The official FrankenPHP image declares a healthcheck, and Traefik routes a container only once it reports healthy: the vhost answers 404 for the first seconds after a start. Set `SERVER_NAME=:80` in the image, so FrankenPHP serves plain http behind the ingress, which terminates TLS, and trust the ingress as a proxy (`framework.trusted_proxies`) so Symfony generates https URLs.
 
 ## The doctor
 
@@ -176,7 +206,7 @@ The ingress belongs to the workstation, not to a project, so its settings are en
 
 Traefik reads the Docker socket to discover the containers. Mounted read-only or not, the socket gives full access to the Docker engine: the ingress only listens on the loopback, and routes on the `Host` header only.
 
-The dashboard answers on http://ingress.localhost:8000/dashboard/. Port 8000 is also the default of `php artisan serve`: stop it before starting the ingress.
+The dashboard answers on http://ingress.localhost:8000/dashboard/. Port 8000 is also the default of `php artisan serve` and `symfony server:start`: stop them before starting the ingress.
 
 ## Vite through the ingress
 
