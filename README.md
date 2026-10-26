@@ -18,7 +18,7 @@ The package needs Castor 1.9 or later. Castor installs it from `castor.composer.
         { "type": "vcs", "url": "https://github.com/ogmdev/castor-devtools" }
     ],
     "require": {
-        "ogmdev/castor-devtools": "^0.2"
+        "ogmdev/castor-devtools": "^0.3"
     }
 }
 ```
