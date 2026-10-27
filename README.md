@@ -23,7 +23,7 @@ The package needs Castor 1.9 or later. Castor installs it from `castor.composer.
 }
 ```
 
-Run `castor composer update` once and commit `castor.composer.lock`. Castor loads `.castor/vendor/autoload.php` on every run. Remote imports are an experimental Castor feature, and `castor --no-remote` (or `CASTOR_NO_REMOTE=1`) disables this package along with every other remote import.
+Run `castor composer update` once and commit `castor.composer.lock`. To move a project to a newer minor version, raise the constraint in `castor.composer.json`, run `castor composer update` again and commit the lock file: 0.3 adds `Project::symfony()`, `SymfonyApp` and `testCommands`, and `runArtisanCommand()` now allocates a terminal when Castor runs in one. Castor loads `.castor/vendor/autoload.php` on every run. Remote imports are an experimental Castor feature, and `castor --no-remote` (or `CASTOR_NO_REMOTE=1`) disables this package along with every other remote import.
 
 The package has no runtime dependency: the Castor binary provides the functions it calls, and a `conflict` on `jolicode/castor <1.9` refuses older ones. Tests that exercise these classes in the application can therefore also require it as a Composer `require-dev`, with the same `vcs` repository, without any version conflict.
 
@@ -78,6 +78,7 @@ Every option of `Project` but `name`, `domain` and `subdomains` has a default, t
 | `phpService` | `php` | compose service that runs Composer, the framework console and the quality tools |
 | `nginxServicesByPhpService` | `[]` | nginx services reloaded after their PHP service restarts |
 | `projectMountedServicePrefixes` | `['php']` | services that mount the project, and so receive the worktree directory |
+| `subdomainPaths` | `[]` | path appended to the URL printed for a subdomain, `['app' => '/admin']` for instance |
 | `containerRoot` | `/var/www/html` | where the services and the Node container mount the project |
 | `containerShell` | `sh` | shell opened by `DockerCompose::openShellInService()` |
 | `viteSubdomain`, `vitePort` | `vite`, `5173` | Vite dev server route, `null` to disable it |
@@ -183,7 +184,7 @@ A step returns a list of `Finding`. A finding with `halts: true` stops the walk,
 
 It works the same with one project, several, or any number of them: no project depends on another, none breaks or downgrades the ingress of another.
 
-- The ingress carries the version of the package that started it. A running ingress of the same version or newer is kept as is, whichever project started it; a newer one only adds a warning to update castor-devtools in the project that is behind. An older one is recreated, once, with a message.
+- The ingress carries the version of the ingress stack shipped by the package that started it (`Ingress::Version`, raised only when `ingress/compose.yaml` changes, so it can lag behind the package version). A running ingress of the same version or newer is kept as is, whichever project started it; a newer one only adds a warning to update castor-devtools in the project that is behind. An older one is recreated, once, with a message.
 - When another container publishes port 8000 or 8443 (a former project-local Traefik, typically), the start stops before compose and names that container, its compose project and the command that frees the port.
 - The doctor reports the containers that carry Traefik labels the ingress ignores (no opt-in label, or not on the network), and the router names or `Host` rules claimed by two projects.
 - `Ingress::restart()` recreates the ingress on purpose.
