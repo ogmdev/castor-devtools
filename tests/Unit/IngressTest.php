@@ -137,7 +137,9 @@ test('a kept ingress is only reported when it is newer than this project or read
         ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\t0.0.0.0\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data', 'listenIp' => '0.0.0.0'])
         ->and($ingress->runningIngressWarnings(Ingress::Version, '/data'))->toBe([])
         ->and($ingress->runningIngressWarnings(Ingress::Version, '/data', ''))->toBe([])
-        ->and($ingress->runningIngressWarnings(Ingress::Version, '/data', Ingress::EveryInterface)[0])->toContain('0.0.0.0', 'local network', 'loopback')
+        ->and($ingress->runningIngressWarnings(Ingress::Version, '/data', Ingress::EveryInterface)[0])->toContain('0.0.0.0', 'local network', 'LocalNetwork::stop()')
+        ->and((new Ingress('traefik:v3.6', '/data', '192.168.1.10'))->runningIngressWarnings(Ingress::Version, '/data', '192.168.1.10'))->toBe([])
+        ->and((new Ingress('traefik:v3.6', '/data', '192.168.1.10'))->runningIngressWarnings(Ingress::Version, '/data', Ingress::EveryInterface)[0])->toContain('0.0.0.0')
         ->and($ingress->runningIngressWarnings('9.0.0', '/data')[0])->toContain('version 9.0.0', 'Update ogmdev/castor-devtools in this project')
         ->and($ingress->runningIngressWarnings(Ingress::Version, '/elsewhere')[0])->toContain('/elsewhere', '/data', 'LOCAL_INGRESS_DATA_DIR');
 });
@@ -172,6 +174,8 @@ test('the ingress commands target one compose project and find it by its compose
 test('a port already taken is explained instead of the raw compose error', function (): void {
     $ingress = new Ingress(dataDirectory: '/data');
 
-    expect($ingress->failureMessage(1, 'Bind for 127.0.0.1:8000 failed: port is already allocated'))->toContain('another process', '8000', '8443')
+    expect($ingress->failureMessage(1, 'Bind for 127.0.0.1:8000 failed: port is already allocated'))->toContain('another process', '127.0.0.1:8000', '127.0.0.1:8443')
+        ->and($ingress->listeningOn(Ingress::EveryInterface)->failureMessage(1, 'address already in use'))->toContain('0.0.0.0:8000', '0.0.0.0:8443')
+        ->and((string) $ingress->listeningOn(Ingress::EveryInterface)->portConflictMessage([8000 => [['name' => 'stray', 'project' => '', 'service' => '']]]))->toContain('needs 0.0.0.0:8000 and 0.0.0.0:8443')
         ->and($ingress->failureMessage(17, 'something else'))->toContain('exit code 17', 'logs traefik');
 });

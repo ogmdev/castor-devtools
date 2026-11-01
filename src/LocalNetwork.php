@@ -7,7 +7,6 @@ namespace Ogmdev\CastorDevtools;
 use RuntimeException;
 
 use function Castor\context;
-use function Castor\exit_code;
 use function Castor\io;
 use function Castor\run;
 
@@ -23,7 +22,7 @@ final readonly class LocalNetwork
 
     public const int SymfonyCliPort = 8001;
 
-    private const string RouterRuleLabel = '/^traefik\.http\.routers\.([^.]+)\.rule$/';
+    private const string LanSuffix = '-lan';
 
     private Project $project;
 
@@ -75,7 +74,7 @@ final readonly class LocalNetwork
         foreach ($this->buildIpAddressCommands() as $command) {
             $address = $this->probe($command);
 
-            if (filter_var($address, FILTER_VALIDATE_IP) !== false) {
+            if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
                 return $address;
             }
         }
@@ -104,35 +103,52 @@ final readonly class LocalNetwork
     }
 
     /**
+     * The address of the interface the default route leaves by, the one the other devices reach; then the usual interfaces, in case there is no default route.
+     *
      * @return list<list<string>>
      */
     public function buildIpAddressCommands(): array
     {
         if ($this->osFamily === 'Darwin') {
-            return [['ipconfig', 'getifaddr', 'en0'], ['ipconfig', 'getifaddr', 'en1']];
+            return [
+                ['sh', '-c', 'ipconfig getifaddr "$(route -n get default 2>/dev/null | awk \'/interface:/ { print $2 }\')"'],
+                ['ipconfig', 'getifaddr', 'en0'],
+                ['ipconfig', 'getifaddr', 'en1'],
+            ];
         }
 
-        return [['sh', '-c', 'hostname -I | cut -d " " -f 1']];
+        return [
+            ['sh', '-c', 'ip -4 route get 1.1.1.1 2>/dev/null | awk \'{ for (i = 1; i <= NF; i++) if ($i == "src") print $(i + 1) }\''],
+            ['sh', '-c', 'hostname -I | cut -d " " -f 1'],
+        ];
     }
 
     public function certificateFile(): string
     {
-        return $this->ingress->certificatesDirectory().'/'.$this->project->domain.'-lan.pem';
+        return $this->ingress->certificatesDirectory().'/'.$this->project->domain.self::LanSuffix.'.pem';
     }
 
     public function keyFile(): string
     {
-        return $this->ingress->certificatesDirectory().'/'.$this->project->domain.'-lan.key.pem';
+        return $this->ingress->certificatesDirectory().'/'.$this->project->domain.self::LanSuffix.'.key.pem';
     }
 
     public function p12File(): string
     {
-        return $this->ingress->certificatesDirectory().'/'.$this->project->domain.'-lan.p12';
+        return $this->ingress->certificatesDirectory().'/'.$this->project->domain.self::LanSuffix.'.p12';
+    }
+
+    /**
+     * Remembers the port of the Symfony CLI server started for the local network: the CLI reports neither the listen address nor who started it.
+     */
+    public function symfonyPortFile(): string
+    {
+        return $this->ingress->certificatesDirectory().'/'.$this->project->domain.self::LanSuffix.'.port';
     }
 
     public function dynamicFile(): string
     {
-        return $this->ingress->dynamicDirectory().'/'.$this->project->domain.'-lan.yaml';
+        return $this->ingress->dynamicDirectory().'/'.$this->project->domain.self::LanSuffix.'.yaml';
     }
 
     /**
@@ -158,12 +174,17 @@ final readonly class LocalNetwork
     {
         $this->ensureBinary('mkcert', sprintf('mkcert is missing: run "%s" first, it installs mkcert and its authority.', $this->project->task($this->project->tasks->tls)));
         $this->ensureBinary('openssl', 'openssl is missing: it converts the certificate to the p12 the Symfony CLI reads.');
-        (new Environment($this->project, $this->ingress))->prepareTlsDirectories();
+        $this->ingress->ensureDataDirectories();
 
         $names = $this->names();
 
         foreach ($this->buildCertificateCommands($names) as $command) {
             run($command, context()->withQuiet());
+        }
+
+        // mkcert protects the key; openssl leaves the unprotected p12 to the umask.
+        if (! @chmod($this->p12File(), 0600)) {
+            throw new RuntimeException(sprintf('Unable to protect %s: the p12 holds the private key without password.', $this->p12File()));
         }
 
         io()->writeln(sprintf('Certificate issued for %s.', implode(' and ', $names)));
@@ -183,8 +204,16 @@ final readonly class LocalNetwork
     {
         $this->ensureBinary('symfony', 'The Symfony CLI is missing: install it (https://symfony.com/download), or serve through the ingress instead.');
 
+        $runningPort = $this->runningSymfonyServerPort($this->symfonyServerStatus());
+
+        if ($runningPort !== null) {
+            io()->note(sprintf('Stopping the Symfony CLI server started for the local network on port %d, to serve the fresh certificate.', $runningPort));
+            $this->stopSymfonyServer();
+        }
+
         $names = $this->issueCertificate();
         run($this->buildSymfonyServerCommand($port));
+        Shell::writeFile($this->symfonyPortFile(), $port.PHP_EOL);
 
         $this->showAccess('The Symfony CLI server', $names, $port);
     }
@@ -197,28 +226,10 @@ final readonly class LocalNetwork
     public function routedService(array $containers): ?string
     {
         foreach ($this->project->subdomains as $subdomain) {
-            $host = '`'.$subdomain.'.'.$this->project->domain.'`';
+            $service = $this->routing->routedService($containers, $subdomain.'.'.$this->project->domain);
 
-            foreach ($containers as $container) {
-                foreach ($container['labels'] as $label => $rule) {
-                    if (preg_match(self::RouterRuleLabel, $label, $matches) !== 1 || ! str_contains($rule, $host)) {
-                        continue;
-                    }
-
-                    $router = $matches[1];
-                    $service = $container['labels']['traefik.http.routers.'.$router.'.service'] ?? null;
-
-                    if ($service !== null) {
-                        return $service;
-                    }
-
-                    $declaresService = array_any(
-                        array_keys($container['labels']),
-                        static fn (string $label): bool => str_starts_with($label, 'traefik.http.services.'.$router.'.'),
-                    );
-
-                    return $declaresService ? $router : null;
-                }
+            if ($service !== null) {
+                return $service;
             }
         }
 
@@ -228,8 +239,10 @@ final readonly class LocalNetwork
     public function missingServiceAdvice(): string
     {
         return sprintf(
-            'No running container routes %s with a named Traefik service: label the service with traefik.http.services.<router>.loadbalancer.server.port (or traefik.http.routers.<router>.service), and start the stack.',
+            'No container the ingress routes serves %s with a named Traefik service: label the service with traefik.http.services.<router>.loadbalancer.server.port (or traefik.http.routers.<router>.service), with %s=true and the %s network, and start the stack.',
             $this->project->subdomains[0].'.'.$this->project->domain,
+            Ingress::EnableLabel,
+            Ingress::Network,
         );
     }
 
@@ -240,15 +253,16 @@ final readonly class LocalNetwork
      */
     public function buildTraefikConfig(string $service, array $names): string
     {
-        $router = $this->slug().'-lan';
+        $router = $this->slug().self::LanSuffix;
         $rule = implode(' || ', array_map(static fn (string $name): string => 'Host(`'.$name.'`)', $names));
+        $reference = str_contains($service, '@') ? $service : $service.'@docker';
 
         return "http:\n"
             ."  routers:\n"
             ."    {$router}:\n"
             ."      rule: {$rule}\n"
             ."      entryPoints: [web, websecure]\n"
-            ."      service: {$service}@docker\n"
+            ."      service: {$reference}\n"
             ."tls:\n"
             ."  certificates:\n"
             .'    - certFile: /etc/traefik/certs/'.basename($this->certificateFile())."\n"
@@ -263,12 +277,14 @@ final readonly class LocalNetwork
 
         $service = $this->routedService($this->routing->runningContainers()) ?? throw new RuntimeException($this->missingServiceAdvice());
         $names = $this->issueCertificate();
-        $this->writeFile($this->dynamicFile(), $this->buildTraefikConfig($service, $names));
 
-        if ($this->ingress->runningListenIp() !== Ingress::EveryInterface) {
+        // The ingress is recreated before the route is written: a recreate that fails leaves nothing behind.
+        if (! in_array($this->ingress->runningListenIp(), [Ingress::EveryInterface, $names[1] ?? null], true)) {
             io()->note('Recreating the local ingress so it listens on every network interface.');
             $this->ingress->listeningOn(Ingress::EveryInterface)->restart();
         }
+
+        Shell::writeFile($this->dynamicFile(), $this->buildTraefikConfig($service, $names));
 
         $this->showAccess('The local ingress', $names, Ingress::HttpsPort);
         io()->writeln('Through the ingress, use the name rather than the address: without a server name, Traefik answers with its default certificate.');
@@ -278,22 +294,29 @@ final readonly class LocalNetwork
     {
         $stopped = [];
 
-        if ($this->isSymfonyServerRunning()) {
-            run(['symfony', 'server:stop'], context()->withQuiet());
+        if ($this->runningSymfonyServerPort($this->symfonyServerStatus()) !== null) {
+            $this->stopSymfonyServer();
             $stopped[] = 'the Symfony CLI server is stopped';
+        } elseif (is_file($this->symfonyPortFile())) {
+            $this->removeFile($this->symfonyPortFile());
         }
 
         if (is_file($this->dynamicFile())) {
-            if (! @unlink($this->dynamicFile())) {
-                throw new RuntimeException(sprintf('Unable to remove %s.', $this->dynamicFile()));
-            }
-
+            $this->removeFile($this->dynamicFile());
             $stopped[] = 'the ingress route is removed';
         }
 
-        if ($this->ingress->runningListenIp() === Ingress::EveryInterface) {
-            $this->ingress->listeningOn(Ingress::Loopback)->restart();
-            $stopped[] = 'the ingress is back on the loopback';
+        $listenIp = $this->ingress->runningListenIp();
+
+        if ($listenIp !== null && $listenIp !== '' && $listenIp !== $this->ingress->listenIp()) {
+            $others = $this->otherLanRoutes();
+
+            if ($others === []) {
+                $this->ingress->listeningOn($this->ingress->listenIp())->restart();
+                $stopped[] = sprintf('the ingress is back on %s', $this->ingress->listenIp());
+            } else {
+                io()->note(sprintf('The ingress keeps listening on %s: %s still served on the local network.', $listenIp, implode(', ', $others)));
+            }
         }
 
         if ($stopped === []) {
@@ -309,32 +332,43 @@ final readonly class LocalNetwork
     {
         io()->section('Local network');
 
-        $names = $this->names();
-        $listenIp = $this->ingress->runningListenIp();
+        try {
+            $names = $this->names();
+        } catch (RuntimeException $exception) {
+            io()->warning($exception->getMessage());
+            $names = [];
+        }
 
-        io()->writeln(sprintf('  %-14s %s', 'Workstation', implode(', ', $names)));
+        $listenIp = $this->ingress->runningListenIp();
+        $symfonyStatus = Shell::hasBinary('symfony') ? $this->symfonyServerStatus() : null;
+        $symfonyPort = $symfonyStatus === null ? null : $this->runningSymfonyServerPort($symfonyStatus);
+
+        io()->writeln(sprintf('  %-14s %s', 'Workstation', $names === [] ? 'unknown' : implode(', ', $names)));
         io()->writeln(sprintf('  %-14s %s', 'Certificate', is_file($this->p12File()) ? $this->p12File() : 'none yet, issued on start'));
         io()->writeln(sprintf('  %-14s %s', 'Ingress', match (true) {
             $listenIp === null => 'stopped',
-            $listenIp === Ingress::EveryInterface && is_file($this->dynamicFile()) => sprintf('serving %s on the local network, https://%s:%d', $this->project->name, $names[0], Ingress::HttpsPort),
-            $listenIp === Ingress::EveryInterface => 'open to the local network, without a route for '.$this->project->name,
-            default => 'loopback only',
+            $listenIp === Ingress::Loopback || $listenIp === '' => 'loopback only',
+            is_file($this->dynamicFile()) => sprintf('serving %s on the local network, https://%s:%d', $this->project->name, $names[0] ?? $listenIp, Ingress::HttpsPort),
+            default => sprintf('listening on %s, without a route for %s', $listenIp, $this->project->name),
         }));
         io()->writeln(sprintf('  %-14s %s', 'Symfony CLI', match (true) {
-            ! $this->hasBinary('symfony') => 'not installed',
-            $this->isSymfonyServerRunning() => 'running: '.$this->symfonyServerStatus(),
+            $symfonyStatus === null => 'not installed',
+            $symfonyPort !== null => sprintf('serving %s on the local network, https://%s:%d', $this->project->name, $names[0] ?? Ingress::EveryInterface, $symfonyPort),
+            $symfonyStatus !== '' => 'running for this workstation only: '.$symfonyStatus,
             default => 'stopped',
         }));
         io()->writeln($this->rootCertificateAdvice());
     }
 
     /**
+     * Reads the certificate as text: `x509 -ext` would be shorter, but LibreSSL, the openssl of macOS, does not have it.
+     *
      * @return list<string>
      */
     public function buildCheckCommand(string $address, int $port, string $serverName): array
     {
         return ['sh', '-c', sprintf(
-            'openssl s_client -connect %s:%d -servername %s </dev/null 2>/dev/null | openssl x509 -noout -issuer -ext subjectAltName',
+            'openssl s_client -connect %s:%d -servername %s </dev/null 2>/dev/null | openssl x509 -noout -issuer -text',
             $address,
             $port,
             escapeshellarg($serverName),
@@ -354,12 +388,13 @@ final readonly class LocalNetwork
         $output = trim($process->getOutput());
 
         if (($process->getExitCode() ?? 1) !== 0 || $output === '') {
-            io()->error(sprintf('Nothing answers over TLS on %s:%d: start the local network access first.', $address, $port));
+            $error = trim($process->getErrorOutput());
+            io()->error(sprintf('Nothing answers over TLS on %s:%d: start the local network access first.%s', $address, $port, $error === '' ? '' : PHP_EOL.$error));
 
             return 1;
         }
 
-        io()->writeln($output);
+        io()->writeln(self::certificateSummary($output));
 
         $missing = self::namesMissingFrom($output, $names);
 
@@ -375,6 +410,27 @@ final readonly class LocalNetwork
     }
 
     /**
+     * The issuer and the subject alternative names, out of the certificate text.
+     */
+    public static function certificateSummary(string $certificateText): string
+    {
+        $lines = array_map(trim(...), explode("\n", $certificateText));
+        $summary = [];
+
+        foreach ($lines as $index => $line) {
+            if (str_starts_with($line, 'issuer=')) {
+                $summary[] = $line;
+            }
+
+            if (str_contains($line, 'Subject Alternative Name') && isset($lines[$index + 1])) {
+                $summary[] = 'Subject Alternative Name: '.$lines[$index + 1];
+            }
+        }
+
+        return implode(PHP_EOL, $summary);
+    }
+
+    /**
      * @param  list<string>  $names
      * @return list<string>
      */
@@ -384,6 +440,25 @@ final readonly class LocalNetwork
             $names,
             static fn (string $name): bool => preg_match('/(?:DNS|IP Address):'.preg_quote($name, '/').'(?=,|\s|$)/', $subjectAltNames) !== 1,
         ));
+    }
+
+    /**
+     * The port of the Symfony CLI server started for the local network, when the server the CLI reports is that one.
+     */
+    public function runningSymfonyServerPort(string $status): ?int
+    {
+        if (! is_file($this->symfonyPortFile())) {
+            return null;
+        }
+
+        $port = (int) trim((string) file_get_contents($this->symfonyPortFile()));
+
+        return $port > 0 && self::listeningPort($status) === $port ? $port : null;
+    }
+
+    public static function listeningPort(string $status): ?int
+    {
+        return preg_match('/Listening on \S+:(\d+)/', $status, $matches) === 1 ? (int) $matches[1] : null;
     }
 
     /**
@@ -397,7 +472,7 @@ final readonly class LocalNetwork
 
     public function rootCertificateAdvice(): string
     {
-        $caRoot = $this->hasBinary('mkcert') ? $this->probe(['mkcert', '-CAROOT']) : '';
+        $caRoot = Shell::hasBinary('mkcert') ? $this->probe(['mkcert', '-CAROOT']) : '';
 
         return sprintf(
             'Each device needs the mkcert authority: copy %s to it and trust it in its settings. One authority signs the vhosts of every project.',
@@ -420,16 +495,37 @@ final readonly class LocalNetwork
         io()->warning('Every device on the local network reaches it: stop it once done.');
     }
 
-    private function isSymfonyServerRunning(): bool
+    private function stopSymfonyServer(): void
     {
-        return $this->hasBinary('symfony') && str_contains($this->symfonyServerStatus(), 'Listening on');
+        run(['symfony', 'server:stop'], context()->withQuiet());
+        $this->removeFile($this->symfonyPortFile());
     }
 
+    /**
+     * The "Listening on" line of the Symfony CLI status, empty when it reports no server.
+     */
     private function symfonyServerStatus(): string
     {
-        $status = $this->probe(['symfony', 'server:status', '--no-ansi']);
+        if (! Shell::hasBinary('symfony')) {
+            return '';
+        }
 
-        return trim(preg_match('/Listening on \S+/', $status, $matches) === 1 ? $matches[0] : $status);
+        return preg_match('/Listening on \S+/', $this->probe(['symfony', 'server:status', '--no-ansi']), $matches) === 1 ? $matches[0] : '';
+    }
+
+    /**
+     * The routes other projects keep in the shared dynamic directory while served on the local network.
+     *
+     * @return list<string>
+     */
+    private function otherLanRoutes(): array
+    {
+        $routes = glob($this->ingress->dynamicDirectory().'/*'.self::LanSuffix.'.yaml') ?: [];
+
+        return array_values(array_map(
+            static fn (string $route): string => basename($route, self::LanSuffix.'.yaml'),
+            array_filter($routes, fn (string $route): bool => $route !== $this->dynamicFile()),
+        ));
     }
 
     private function slug(): string
@@ -447,23 +543,15 @@ final readonly class LocalNetwork
 
     private function ensureBinary(string $binary, string $advice): void
     {
-        if (! $this->hasBinary($binary)) {
+        if (! Shell::hasBinary($binary)) {
             throw new RuntimeException($advice);
         }
     }
 
-    /**
-     * @phpstan-impure
-     */
-    private function hasBinary(string $binary): bool
+    private function removeFile(string $path): void
     {
-        return exit_code(['sh', '-c', 'command -v '.escapeshellarg($binary)], context()->withQuiet()) === 0;
-    }
-
-    private function writeFile(string $path, string $contents): void
-    {
-        if (file_put_contents($path, $contents) === false) {
-            throw new RuntimeException(sprintf('Unable to write %s.', $path));
+        if (! @unlink($path)) {
+            throw new RuntimeException(sprintf('Unable to remove %s.', $path));
         }
     }
 }

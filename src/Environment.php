@@ -45,8 +45,8 @@ final readonly class Environment
             '*.'.$this->project->domain,
         ]);
 
-        $this->writeFile($this->tlsDynamicFile(), $this->buildTlsDynamicConfig());
-        $this->writeFile($this->redirectFile(), $this->buildHttpsRedirectConfig());
+        Shell::writeFile($this->tlsDynamicFile(), $this->buildTlsDynamicConfig());
+        Shell::writeFile($this->redirectFile(), $this->buildHttpsRedirectConfig());
 
         io()->success(sprintf('TLS enabled on the local ingress for *.%s: port %d now redirects to https, like a production edge.', $this->project->domain, Ingress::HttpPort));
 
@@ -742,27 +742,20 @@ final readonly class Environment
         return (string) preg_replace('/[^a-z0-9]+/', '-', strtolower($this->project->domain));
     }
 
-    private function writeFile(string $path, string $contents): void
-    {
-        if (file_put_contents($path, $contents) === false) {
-            throw new RuntimeException(sprintf('Unable to write %s.', $path));
-        }
-    }
-
     private function ensureMkcertInstalled(): void
     {
         if ($this->isMkcertAvailable()) {
             return;
         }
 
-        $hasApt = $this->hasBinary('apt-get');
+        $hasApt = Shell::hasBinary('apt-get');
         $advice = $this->mkcertInstallAdvice($this->isWsl(), PHP_OS_FAMILY, $hasApt);
 
         $command = $this->mkcertInstallCommand(
             $this->isWsl(),
             PHP_OS_FAMILY,
             $hasApt,
-            $this->hasBinary('brew'),
+            Shell::hasBinary('brew'),
         );
 
         if ($command === null) {
@@ -833,7 +826,7 @@ final readonly class Environment
     {
         $pemPath = $this->certificateAuthorityPemPath();
 
-        if ($pemPath === null || ! $this->hasBinary('certutil.exe')) {
+        if ($pemPath === null || ! Shell::hasBinary('certutil.exe')) {
             io()->writeln($this->wslCertificateTrustAdvice());
 
             return;
@@ -897,10 +890,5 @@ final readonly class Environment
     private function isMkcertAvailable(): bool
     {
         return exit_code(['mkcert', '-version'], context()->withQuiet()) === 0;
-    }
-
-    private function hasBinary(string $binary): bool
-    {
-        return exit_code(['sh', '-c', 'command -v '.escapeshellarg($binary)], context()->withQuiet()) === 0;
     }
 }

@@ -156,6 +156,56 @@ final readonly class IngressRouting
     }
 
     /**
+     * The Docker-provider service that serves the host, named by the project's own labels on a container the ingress routes:
+     * the one the router names (with or without its @docker suffix), else the router itself when a service of that name is declared.
+     * Routers served by another provider (noop@internal of a redirect, api@internal) are passed over.
+     *
+     * @param  list<array{name: string, project: string, labels: array<string, string>, networks: list<string>, health: string}>  $containers
+     */
+    public function routedService(array $containers, string $host): ?string
+    {
+        $needle = '`'.$host.'`';
+
+        foreach ($containers as $container) {
+            if ($container['project'] === Ingress::ProjectName || ! $this->isRouted($container)) {
+                continue;
+            }
+
+            foreach ($container['labels'] as $label => $rule) {
+                if (preg_match(self::RouterLabel, $label, $matches) !== 1 || ! str_contains($rule, $needle)) {
+                    continue;
+                }
+
+                $router = $matches[1];
+                $service = $container['labels']['traefik.http.routers.'.$router.'.service'] ?? null;
+
+                if ($service !== null) {
+                    if (! str_contains($service, '@')) {
+                        return $service;
+                    }
+
+                    if (str_ends_with($service, '@docker')) {
+                        return substr($service, 0, -strlen('@docker'));
+                    }
+
+                    continue;
+                }
+
+                $declaresService = array_any(
+                    array_keys($container['labels']),
+                    static fn (string $label): bool => str_starts_with($label, 'traefik.http.services.'.$router.'.'),
+                );
+
+                if ($declaresService) {
+                    return $router;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @param  array<string, string>  $labels
      */
     private function hasTraefikLabels(array $labels): bool

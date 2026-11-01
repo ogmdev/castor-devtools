@@ -147,11 +147,8 @@ final readonly class Ingress
     {
         $this->ensureDataDirectories();
         $this->ensureNetwork();
-
-        if ($this->runningIngress() === null) {
-            $this->ensurePortsAreFree();
-        }
-
+        // The running ingress is not a holder of its own ports: the check also covers a recreate on another address.
+        $this->ensurePortsAreFree();
         $this->up($this->buildRestartCommand());
     }
 
@@ -181,9 +178,9 @@ final readonly class Ingress
     {
         $warnings = [];
 
-        if ($listenIp !== '' && $listenIp !== self::Loopback) {
+        if ($listenIp !== '' && $listenIp !== self::Loopback && $listenIp !== $this->listenIp) {
             $warnings[] = sprintf(
-                'The local ingress listens on %s: every device on the local network reaches its vhosts until it is recreated on the loopback (LocalNetwork::stop()).',
+                'The local ingress listens on %s, opened by a project served on the local network: every device there reaches the vhosts of every project until that project stops its local network access (LocalNetwork::stop()).',
                 $listenIp,
             );
         }
@@ -272,7 +269,7 @@ final readonly class Ingress
         }
 
         return implode(PHP_EOL, [
-            sprintf('The local ingress needs 127.0.0.1:%d and 127.0.0.1:%d, shared by every project, and another container holds them:', self::HttpPort, self::HttpsPort),
+            sprintf('The local ingress needs %1$s:%2$d and %1$s:%3$d, shared by every project, and another container holds them:', $this->listenIp, self::HttpPort, self::HttpsPort),
             ...array_map(rtrim(...), array_values(array_unique($lines))),
             'Stop it, move that project to the local ingress (label local-ingress.enable and the external network local-ingress), then start again.',
         ]);
@@ -297,7 +294,8 @@ final readonly class Ingress
     {
         if (str_contains($errorOutput, 'port is already allocated') || str_contains($errorOutput, 'address already in use')) {
             return sprintf(
-                'The local ingress cannot listen on 127.0.0.1:%d and 127.0.0.1:%d: another process already uses one of these ports (a former Traefik, "php artisan serve", "symfony server:start"...). Free them, then start again.',
+                'The local ingress cannot listen on %1$s:%2$d and %1$s:%3$d: another process already uses one of these ports (a former Traefik, "php artisan serve", "symfony server:start"...). Free them, then start again.',
+                $this->listenIp,
                 self::HttpPort,
                 self::HttpsPort,
             );
@@ -385,7 +383,7 @@ final readonly class Ingress
         return ($process->getExitCode() ?? 1) === 0 ? $this->parseRunningIngress($process->getOutput()) : null;
     }
 
-    private function ensureDataDirectories(): void
+    public function ensureDataDirectories(): void
     {
         foreach ([$this->certificatesDirectory(), $this->dynamicDirectory()] as $directory) {
             if (! is_dir($directory) && ! @mkdir($directory, 0755, true) && ! is_dir($directory)) {
