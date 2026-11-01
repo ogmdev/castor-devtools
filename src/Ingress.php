@@ -25,7 +25,9 @@ final readonly class Ingress
 
     public const string DataDirectoryLabel = 'local-ingress.data-dir';
 
-    public const string Version = '0.2.0';
+    public const string ListenIpLabel = 'local-ingress.listen-ip';
+
+    public const string Version = '0.3.0';
 
     public const string DefaultImage = 'traefik:v3.6';
 
@@ -35,14 +37,21 @@ final readonly class Ingress
 
     public const string DashboardUrl = 'http://ingress.localhost:8000/dashboard/';
 
+    public const string Loopback = '127.0.0.1';
+
+    public const string EveryInterface = '0.0.0.0';
+
     private string $traefikImage;
 
     private string $dataDirectory;
 
-    public function __construct(?string $traefikImage = null, ?string $dataDirectory = null)
+    private string $listenIp;
+
+    public function __construct(?string $traefikImage = null, ?string $dataDirectory = null, ?string $listenIp = null)
     {
         $this->traefikImage = $traefikImage ?? self::environmentValue('LOCAL_INGRESS_TRAEFIK_IMAGE') ?? self::DefaultImage;
         $this->dataDirectory = rtrim($dataDirectory ?? self::defaultDataDirectory(), '/');
+        $this->listenIp = $listenIp ?? self::environmentValue('LOCAL_INGRESS_LISTEN_IP') ?? self::Loopback;
     }
 
     public static function defaultDataDirectory(): string
@@ -74,6 +83,24 @@ final readonly class Ingress
         return $this->traefikImage;
     }
 
+    /**
+     * The address the ingress publishes its ports on: the loopback, unless a project opens it to the local network.
+     */
+    public function listenIp(): string
+    {
+        return $this->listenIp;
+    }
+
+    public function listeningOn(string $listenIp): self
+    {
+        return new self($this->traefikImage, $this->dataDirectory, $listenIp);
+    }
+
+    public function runningListenIp(): ?string
+    {
+        return $this->runningIngress()['listenIp'] ?? null;
+    }
+
     public function certificatesDirectory(): string
     {
         return $this->dataDirectory.'/certs';
@@ -96,7 +123,7 @@ final readonly class Ingress
         $running = $this->runningIngress();
 
         if ($running !== null && $this->isUpToDate($running['version'])) {
-            foreach ($this->runningIngressWarnings($running['version'], $running['dataDirectory']) as $warning) {
+            foreach ($this->runningIngressWarnings($running['version'], $running['dataDirectory'], $running['listenIp']) as $warning) {
                 io()->warning($warning);
             }
 
@@ -150,9 +177,16 @@ final readonly class Ingress
     /**
      * @return list<string>
      */
-    public function runningIngressWarnings(string $version, string $dataDirectory): array
+    public function runningIngressWarnings(string $version, string $dataDirectory, string $listenIp = self::Loopback): array
     {
         $warnings = [];
+
+        if ($listenIp !== '' && $listenIp !== self::Loopback) {
+            $warnings[] = sprintf(
+                'The local ingress listens on %s: every device on the local network reaches its vhosts until it is recreated on the loopback (LocalNetwork::stop()).',
+                $listenIp,
+            );
+        }
 
         if ($version !== '' && version_compare($version, self::Version, '>')) {
             $warnings[] = sprintf(
@@ -174,7 +208,7 @@ final readonly class Ingress
     }
 
     /**
-     * @return array{version: string, dataDirectory: string}|null
+     * @return array{version: string, dataDirectory: string, listenIp: string}|null
      */
     public function parseRunningIngress(string $output): ?array
     {
@@ -184,9 +218,9 @@ final readonly class Ingress
             return null;
         }
 
-        [$version, $dataDirectory] = array_pad(explode("\t", $line, 2), 2, '');
+        [$version, $dataDirectory, $listenIp] = array_pad(explode("\t", $line, 3), 3, '');
 
-        return ['version' => trim($version), 'dataDirectory' => trim($dataDirectory)];
+        return ['version' => trim($version), 'dataDirectory' => trim($dataDirectory), 'listenIp' => trim($listenIp)];
     }
 
     /**
@@ -280,6 +314,7 @@ final readonly class Ingress
         return [
             'LOCAL_INGRESS_DATA_DIR' => $this->dataDirectory,
             'LOCAL_INGRESS_TRAEFIK_IMAGE' => $this->traefikImage,
+            'LOCAL_INGRESS_LISTEN_IP' => $this->listenIp,
         ];
     }
 
@@ -328,7 +363,7 @@ final readonly class Ingress
             '--filter',
             'label=com.docker.compose.service='.self::Service,
             '--format',
-            sprintf('{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}', self::VersionLabel, self::DataDirectoryLabel),
+            sprintf('{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}', self::VersionLabel, self::DataDirectoryLabel, self::ListenIpLabel),
         ];
     }
 
@@ -341,7 +376,7 @@ final readonly class Ingress
     }
 
     /**
-     * @return array{version: string, dataDirectory: string}|null
+     * @return array{version: string, dataDirectory: string, listenIp: string}|null
      */
     private function runningIngress(): ?array
     {

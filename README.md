@@ -227,10 +227,40 @@ The ingress belongs to the workstation, not to a project, so its settings are en
 | `LOCAL_INGRESS_TRAEFIK_IMAGE` | `traefik:v3.6` | Traefik image, for instance from a registry mirror |
 | `LOCAL_INGRESS_DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket, for rootless Docker or Podman |
 | `LOCAL_INGRESS_TRUST_FORWARDED_HEADERS` | `false` | trust the `X-Forwarded-*` headers received on port 8000, behind a tunnel for instance |
+| `LOCAL_INGRESS_LISTEN_IP` | `127.0.0.1` | the address the ports are published on; `LocalNetwork` sets it for the time of a local network session |
 
-Traefik reads the Docker socket to discover the containers. Mounted read-only or not, the socket gives full access to the Docker engine: the ingress only listens on the loopback, and routes on the `Host` header only.
+Traefik reads the Docker socket to discover the containers. Mounted read-only or not, the socket gives full access to the Docker engine: the ingress only listens on the loopback (until a project opens it to the local network, see below), and routes on the `Host` header only.
 
 The dashboard answers on http://ingress.localhost:8000/dashboard/. Port 8000 is also the default of `php artisan serve` and `symfony server:start`: stop them before starting the ingress.
+
+## The local network
+
+`LocalNetwork` serves the project over https to the other devices of the local network, a phone or a tablet for instance, to try a PWA or a responsive layout on the real thing. It names the workstation by its Bonjour name (`scutil --get LocalHostName` on macOS, `hostname -s` elsewhere, plus `.local`, which phones resolve without any DNS) and its address on the network, asks mkcert for a certificate covering both, and serves it one of two ways:
+
+| Method | Server | Port |
+|---|---|---|
+| `startSymfonyServer()` | the Symfony CLI server, on every interface, with the certificate as a p12 without password (openssl converts it: the CLI reads no other) | `8001` by default |
+| `startTraefik()` | the shared ingress: a route for the workstation names, forwarded to the project's own Traefik service, and the ingress recreated on every interface | `8443` |
+
+Then `check()` reads the certificate the server sends and verifies it covers the names, `showStatus()` says what runs, and `stop()` stops the Symfony server, removes the route and brings the ingress back on the loopback.
+
+```php
+#[AsTask(name: 'lan:start', description: 'Serves the project on the local network; --via=symfony for the Symfony CLI server.')]
+function lan_start(string $via = LocalNetwork::Traefik, int $port = LocalNetwork::SymfonyCliPort): void
+{
+    $via === LocalNetwork::SymfonyCli ? (new LocalNetwork)->startSymfonyServer($port) : (new LocalNetwork)->startTraefik();
+}
+
+#[AsTask(name: 'lan:stop', description: 'Stops serving the project on the local network.')]
+function lan_stop(): void
+{
+    (new LocalNetwork)->stop();
+}
+```
+
+A fresh certificate is issued on every start, since the address changes with the network. The authority does not: each device trusts `rootCA.pem` from `mkcert -CAROOT` once, in its own settings, and the vhosts of every project follow. Through the ingress, use the name rather than the address: without a server name, Traefik answers with its default certificate. The route forwards to the service the project labels on the router of its first subdomain, so that router needs `traefik.http.services.<router>.loadbalancer.server.port` or `traefik.http.routers.<router>.service`.
+
+While the ingress listens on every interface, every device on the network reaches the vhosts of every project, by `Host` header: `Ingress::ensureRunning()` keeps warning about it until `stop()`.
 
 ## Vite through the ingress
 

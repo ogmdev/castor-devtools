@@ -42,7 +42,7 @@ test('the ingress lives in its own compose project on a shared external network'
         ->and($compose['services'][Ingress::Service]['networks'])->toBe([Ingress::Network]);
 });
 
-test('traefik routes every container that opts in with the one label, and nothing else, on loopback ports', function (): void {
+test('traefik routes every container that opts in with the one label, and nothing else, on loopback ports unless the workstation opens them', function (): void {
     $traefik = ingressCompose()['services'][Ingress::Service];
 
     expect($traefik['command'])->toContain(
@@ -52,8 +52,8 @@ test('traefik routes every container that opts in with the one label, and nothin
         '--entrypoints.websecure.http.tls=true',
     )
         ->and($traefik['ports'])->toBe([
-            sprintf('127.0.0.1:%d:80', Ingress::HttpPort),
-            sprintf('127.0.0.1:%d:443', Ingress::HttpsPort),
+            sprintf('${LOCAL_INGRESS_LISTEN_IP:-%s}:%d:80', Ingress::Loopback, Ingress::HttpPort),
+            sprintf('${LOCAL_INGRESS_LISTEN_IP:-%s}:%d:443', Ingress::Loopback, Ingress::HttpsPort),
         ])
         ->and($traefik['labels'][Ingress::EnableLabel])->toBe('true');
 });
@@ -74,6 +74,7 @@ test('the compose file labels the running ingress with the package version and t
 
     expect($traefik['labels'][Ingress::VersionLabel])->toBe(Ingress::Version)
         ->and($traefik['labels'][Ingress::DataDirectoryLabel])->toBe($dataDirectory)
+        ->and($traefik['labels'][Ingress::ListenIpLabel])->toBe('${LOCAL_INGRESS_LISTEN_IP:-'.Ingress::Loopback.'}')
         ->and($traefik['volumes'])->toContain(
             $dataDirectory.'/dynamic:/etc/traefik/dynamic:ro',
             $dataDirectory.'/certs:/etc/traefik/certs:ro',
@@ -89,6 +90,17 @@ test('certificates and dynamic files live in one data directory every project sh
         ->and($ingress->composeEnvironment())->toBe([
             'LOCAL_INGRESS_DATA_DIR' => '/home/dev/.local/share/local-ingress',
             'LOCAL_INGRESS_TRAEFIK_IMAGE' => 'traefik:v3.6',
+            'LOCAL_INGRESS_LISTEN_IP' => Ingress::Loopback,
+        ]);
+});
+
+test('the ingress publishes its ports on the loopback unless the workstation or a project opens them', function (): void {
+    expect(withEnvironment(['LOCAL_INGRESS_LISTEN_IP' => null], fn (): string => (new Ingress(dataDirectory: '/data'))->listenIp()))->toBe(Ingress::Loopback)
+        ->and(withEnvironment(['LOCAL_INGRESS_LISTEN_IP' => '192.168.1.10'], fn (): string => (new Ingress(dataDirectory: '/data'))->listenIp()))->toBe('192.168.1.10')
+        ->and((new Ingress('traefik:v3.6', '/data'))->listeningOn(Ingress::EveryInterface)->composeEnvironment())->toBe([
+            'LOCAL_INGRESS_DATA_DIR' => '/data',
+            'LOCAL_INGRESS_TRAEFIK_IMAGE' => 'traefik:v3.6',
+            'LOCAL_INGRESS_LISTEN_IP' => Ingress::EveryInterface,
         ]);
 });
 
@@ -121,8 +133,11 @@ test('a kept ingress is only reported when it is newer than this project or read
     $ingress = new Ingress(dataDirectory: '/data');
 
     expect($ingress->parseRunningIngress(''))->toBeNull()
-        ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data'])
+        ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data', 'listenIp' => ''])
+        ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\t0.0.0.0\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data', 'listenIp' => '0.0.0.0'])
         ->and($ingress->runningIngressWarnings(Ingress::Version, '/data'))->toBe([])
+        ->and($ingress->runningIngressWarnings(Ingress::Version, '/data', ''))->toBe([])
+        ->and($ingress->runningIngressWarnings(Ingress::Version, '/data', Ingress::EveryInterface)[0])->toContain('0.0.0.0', 'local network', 'loopback')
         ->and($ingress->runningIngressWarnings('9.0.0', '/data')[0])->toContain('version 9.0.0', 'Update ogmdev/castor-devtools in this project')
         ->and($ingress->runningIngressWarnings(Ingress::Version, '/elsewhere')[0])->toContain('/elsewhere', '/data', 'LOCAL_INGRESS_DATA_DIR');
 });
