@@ -146,14 +146,17 @@ test('a kept ingress is only reported when it is newer than this project or read
 
 test('a port held by another container names that container, its compose project and the command that frees it', function (): void {
     $ingress = new Ingress(dataDirectory: '/data');
-    $holders = $ingress->parsePortHolders("acme-traefik-1\tacme\ttraefik\nlocal-ingress-traefik-1\tlocal-ingress\ttraefik\nstray\t\t\n");
+    $holders = $ingress->parsePortHolders("acme-traefik-1\tacme\ttraefik\nlocal-ingress-traefik-1\tlocal-ingress\ttraefik\nacme-proxy\tacme\t\nstray\t\t\n");
     $message = (string) $ingress->portConflictMessage([8000 => $holders, 8443 => []]);
 
     expect($holders)->toBe([
         ['name' => 'acme-traefik-1', 'project' => 'acme', 'service' => 'traefik'],
+        ['name' => 'acme-proxy', 'project' => 'acme', 'service' => ''],
         ['name' => 'stray', 'project' => '', 'service' => ''],
     ])
         ->and($message)->toContain('port 8000 is published by the container acme-traefik-1 of the compose project acme: docker compose --project-name acme stop traefik')
+        ->and($message)->toContain('port 8000 is published by the container acme-proxy of the compose project acme: docker stop acme-proxy')
+        ->and($message)->not->toContain('docker compose --project-name acme stop'.PHP_EOL)
         ->and($message)->toContain('port 8000 is published by the container stray: docker stop stray')
         ->and($ingress->portConflictMessage([8000 => [], 8443 => []]))->toBeNull()
         ->and($ingress->buildPortHoldersCommand(8443))->toContain('publish=8443');
