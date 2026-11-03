@@ -18,12 +18,12 @@ The package needs Castor 1.9 or later. Castor installs it from `castor.composer.
         { "type": "vcs", "url": "https://github.com/ogmdev/castor-devtools" }
     ],
     "require": {
-        "ogmdev/castor-devtools": "^0.3"
+        "ogmdev/castor-devtools": "^0.4"
     }
 }
 ```
 
-Run `castor composer update` once and commit `castor.composer.lock`. To move a project to a newer minor version, raise the constraint in `castor.composer.json`, run `castor composer update` again and commit the lock file: 0.3 adds `Project::symfony()`, `SymfonyApp` and `testCommands`, and `runArtisanCommand()` now allocates a terminal when Castor runs in one. Castor loads `.castor/vendor/autoload.php` on every run. Remote imports are an experimental Castor feature, and `castor --no-remote` (or `CASTOR_NO_REMOTE=1`) disables this package along with every other remote import.
+Run `castor composer update` once and commit `castor.composer.lock`. To move a project to a newer minor version, raise the constraint in `castor.composer.json`, run `castor composer update` again and commit the lock file: 0.3 adds `Project::symfony()`, `SymfonyApp` and `testCommands`, and `runArtisanCommand()` now allocates a terminal when Castor runs in one; 0.4 adds `LocalNetwork` (see [The local network](#the-local-network)). Castor loads `.castor/vendor/autoload.php` on every run. Remote imports are an experimental Castor feature, and `castor --no-remote` (or `CASTOR_NO_REMOTE=1`) disables this package along with every other remote import.
 
 The package has no runtime dependency: the Castor binary provides the functions it calls, and a `conflict` on `jolicode/castor <1.9` refuses older ones. Tests that exercise these classes in the application can therefore also require it as a Composer `require-dev`, with the same `vcs` repository, without any version conflict.
 
