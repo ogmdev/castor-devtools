@@ -26,7 +26,9 @@ function mainCompose(): DockerCompose
 
 test('composer and artisan run in the configured php service', function (): void {
     expect((new Composer(mainCompose()))->buildComposerCommand(['install']))->toBe(['docker', 'compose', 'run', '-T', '--rm', 'php-app', 'composer', 'install'])
-        ->and((new Laravel(mainCompose()))->buildArtisanCommand(['route:list']))->toBe(['docker', 'compose', 'exec', '-T', 'php-app', 'php', 'artisan', 'route:list']);
+        ->and((new Laravel(mainCompose()))->buildArtisanCommand(['route:list']))->toBe(['docker', 'compose', 'exec', '-T', 'php-app', 'php', 'artisan', 'route:list'])
+        ->and((new Laravel(mainCompose()))->buildArtisanCommand(['route:list'], ['API_ACTIVE' => 'true']))
+        ->toBe(['docker', 'compose', 'exec', '-T', '-e', 'API_ACTIVE=true', 'php-app', 'php', 'artisan', 'route:list']);
 });
 
 test('the test run clears the config cache then runs the suite in parallel', function (): void {

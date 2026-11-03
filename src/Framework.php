@@ -20,10 +20,11 @@ abstract readonly class Framework
 
     /**
      * @param  list<string>  $arguments
+     * @param  array<string, string>  $environment
      */
-    public function captureConsoleCommand(array $arguments): string
+    public function captureConsoleCommand(array $arguments, array $environment = []): string
     {
-        return $this->docker->captureCommandInService($this->docker->phpService(), [...$this->consoleCommand(), ...$arguments]);
+        return $this->docker->captureCommandInService($this->docker->phpService(), [...$this->consoleCommand(), ...$arguments], $environment);
     }
 
     public function clearCache(): void
@@ -50,11 +51,12 @@ abstract readonly class Framework
 
     /**
      * @param  list<string>  $arguments
+     * @param  array<string, string>  $environment
      * @return list<string>
      */
-    public function buildConsoleCommand(array $arguments, bool $tty = false): array
+    public function buildConsoleCommand(array $arguments, bool $tty = false, array $environment = []): array
     {
-        return $this->docker->buildExecCommand($this->docker->phpService(), [...$this->consoleCommand(), ...$arguments], $tty);
+        return $this->docker->buildExecCommand($this->docker->phpService(), [...$this->consoleCommand(), ...$arguments], $tty, $environment);
     }
 
     /**

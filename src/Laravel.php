@@ -16,10 +16,11 @@ final readonly class Laravel extends Framework
 
     /**
      * @param  list<string>  $arguments
+     * @param  array<string, string>  $environment
      */
-    public function captureArtisanCommand(array $arguments): string
+    public function captureArtisanCommand(array $arguments, array $environment = []): string
     {
-        return $this->captureConsoleCommand($arguments);
+        return $this->captureConsoleCommand($arguments, $environment);
     }
 
     public function clearLaravelCache(): void
@@ -29,11 +30,12 @@ final readonly class Laravel extends Framework
 
     /**
      * @param  list<string>  $arguments
+     * @param  array<string, string>  $environment
      * @return list<string>
      */
-    public function buildArtisanCommand(array $arguments): array
+    public function buildArtisanCommand(array $arguments, array $environment = []): array
     {
-        return $this->buildConsoleCommand($arguments);
+        return $this->buildConsoleCommand($arguments, environment: $environment);
     }
 
     protected function consoleCommand(): array

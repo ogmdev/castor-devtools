@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Ogmdev\CastorDevtools;
 
 use RuntimeException;
+use Symfony\Component\Console\Formatter\OutputFormatter;
 
 use function Castor\context;
 use function Castor\exit_code;
+use function Castor\io;
 use function Castor\run;
 
 final readonly class DockerCompose
@@ -40,7 +42,7 @@ final readonly class DockerCompose
     {
         $this->project->warnBeforeBuild();
 
-        run($this->buildStartContainersCommand($service, $forceRecreate), context()->withEnvironment($environment));
+        SecretEnvironment::runWithoutCastorPrintingIt($this->buildStartContainersCommand($service, $forceRecreate), $environment);
 
         $this->reloadNginxUpstreams($service);
     }
@@ -189,6 +191,12 @@ final readonly class DockerCompose
 
         if (($process->getExitCode() ?? 1) !== 0) {
             throw new RuntimeException($this->capturedCommandFailureMessage($service, $command, $process->getExitCode() ?? 1, trim($output."\n".$process->getErrorOutput())));
+        }
+
+        $errorOutput = trim($process->getErrorOutput());
+
+        if ($errorOutput !== '') {
+            io()->writeln(OutputFormatter::escape($errorOutput));
         }
 
         return $output;
