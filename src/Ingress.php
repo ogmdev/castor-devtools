@@ -251,16 +251,19 @@ final readonly class Ingress
 
         foreach ($holdersByPort as $port => $holders) {
             foreach ($holders as $holder) {
-                $lines[] = $holder['project'] === ''
-                    ? sprintf('- port %d is published by the container %s: docker stop %s', $port, $holder['name'], $holder['name'])
-                    : sprintf(
+                // Without a service, "docker compose stop" would stop the whole project, so the container is stopped by name.
+                $lines[] = match (true) {
+                    $holder['project'] === '' => sprintf('- port %d is published by the container %s: docker stop %s', $port, $holder['name'], $holder['name']),
+                    $holder['service'] === '' => sprintf('- port %d is published by the container %s of the compose project %s: docker stop %s', $port, $holder['name'], $holder['project'], $holder['name']),
+                    default => sprintf(
                         '- port %d is published by the container %s of the compose project %s: docker compose --project-name %s stop %s',
                         $port,
                         $holder['name'],
                         $holder['project'],
                         $holder['project'],
-                        $holder['service'] === '' ? '' : $holder['service'],
-                    );
+                        $holder['service'],
+                    ),
+                };
             }
         }
 
@@ -270,7 +273,7 @@ final readonly class Ingress
 
         return implode(PHP_EOL, [
             sprintf('The local ingress needs %1$s:%2$d and %1$s:%3$d, shared by every project, and another container holds them:', $this->listenIp, self::HttpPort, self::HttpsPort),
-            ...array_map(rtrim(...), array_values(array_unique($lines))),
+            ...array_values(array_unique($lines)),
             'Stop it, move that project to the local ingress (label local-ingress.enable and the external network local-ingress), then start again.',
         ]);
     }
