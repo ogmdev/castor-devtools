@@ -85,13 +85,13 @@ test('the symfony cli server started for the local network is told apart by the 
     }
 });
 
-test('the traefik route forwards the workstation names on both entrypoints to the project service, with the certificate', function (): void {
+test('the traefik route forwards the workstation names to the project service on the local network entrypoint alone, with the certificate', function (): void {
     $config = Yaml::parse(localNetwork()->buildTraefikConfig('acme-app', ['dev-mac.local', '192.168.1.20']));
     $elsewhere = Yaml::parse(localNetwork()->buildTraefikConfig('acme-app@file', ['dev-mac.local']));
 
     expect($config['http']['routers']['acme-localhost-lan'])->toBe([
         'rule' => 'Host(`dev-mac.local`) || Host(`192.168.1.20`)',
-        'entryPoints' => ['web', 'websecure'],
+        'entryPoints' => [Ingress::LanEntryPoint],
         'service' => 'acme-app@docker',
     ])
         ->and($config['tls']['certificates'])->toBe([[

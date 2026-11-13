@@ -247,7 +247,7 @@ final readonly class LocalNetwork
     }
 
     /**
-     * The route and certificate Traefik reads from its dynamic directory: the names on https, forwarded to the project's own service.
+     * The route and certificate Traefik reads from its dynamic directory: the names on the local network entrypoint alone, forwarded to the project's own service.
      *
      * @param  non-empty-list<string>  $names
      */
@@ -261,7 +261,7 @@ final readonly class LocalNetwork
             ."  routers:\n"
             ."    {$router}:\n"
             ."      rule: {$rule}\n"
-            ."      entryPoints: [web, websecure]\n"
+            .'      entryPoints: ['.Ingress::LanEntryPoint."]\n"
             ."      service: {$reference}\n"
             ."tls:\n"
             ."  certificates:\n"
@@ -279,14 +279,14 @@ final readonly class LocalNetwork
         $names = $this->issueCertificate();
 
         // The ingress is recreated before the route is written: a recreate that fails leaves nothing behind.
-        if (! in_array($this->ingress->runningListenIp(), [Ingress::EveryInterface, $names[1] ?? null], true)) {
-            io()->note('Recreating the local ingress so it listens on every network interface.');
-            $this->ingress->listeningOn(Ingress::EveryInterface)->restart();
+        if (! $this->ingress->runsOpenToLocalNetwork()) {
+            io()->note(sprintf('Recreating the local ingress so it publishes port %d on every network interface: the vhosts of every project stay on %s.', Ingress::LanHttpsPort, $this->ingress->listenIp()));
+            $this->ingress->openToLocalNetwork()->restart();
         }
 
         Shell::writeFile($this->dynamicFile(), $this->buildTraefikConfig($service, $names));
 
-        $this->showAccess('The local ingress', $names, Ingress::HttpsPort);
+        $this->showAccess('The local ingress', $names, Ingress::LanHttpsPort);
         io()->writeln('Through the ingress, use the name rather than the address: without a server name, Traefik answers with its default certificate.');
     }
 
@@ -306,16 +306,14 @@ final readonly class LocalNetwork
             $stopped[] = 'the ingress route is removed';
         }
 
-        $listenIp = $this->ingress->runningListenIp();
-
-        if ($listenIp !== null && $listenIp !== '' && $listenIp !== $this->ingress->listenIp()) {
+        if ($this->ingress->runsOpenToLocalNetwork() || $this->ingressListensBeyondItsAddress()) {
             $others = $this->otherLanRoutes();
 
             if ($others === []) {
-                $this->ingress->listeningOn($this->ingress->listenIp())->restart();
-                $stopped[] = sprintf('the ingress is back on %s', $this->ingress->listenIp());
+                $this->ingress->restart();
+                $stopped[] = sprintf('the ingress only listens on %s', $this->ingress->listenIp());
             } else {
-                io()->note(sprintf('The ingress keeps listening on %s: %s still served on the local network.', $listenIp, implode(', ', $others)));
+                io()->note(sprintf('The ingress stays open to the local network: %s still served there.', implode(', ', $others)));
             }
         }
 
@@ -340,6 +338,7 @@ final readonly class LocalNetwork
         }
 
         $listenIp = $this->ingress->runningListenIp();
+        $open = $this->ingress->runsOpenToLocalNetwork();
         $symfonyStatus = Shell::hasBinary('symfony') ? $this->symfonyServerStatus() : null;
         $symfonyPort = $symfonyStatus === null ? null : $this->runningSymfonyServerPort($symfonyStatus);
 
@@ -347,9 +346,10 @@ final readonly class LocalNetwork
         io()->writeln(sprintf('  %-14s %s', 'Certificate', is_file($this->p12File()) ? $this->p12File() : 'none yet, issued on start'));
         io()->writeln(sprintf('  %-14s %s', 'Ingress', match (true) {
             $listenIp === null => 'stopped',
+            $open && is_file($this->dynamicFile()) => sprintf('serving %s on the local network, https://%s:%d', $this->project->name, $names[0] ?? Ingress::EveryInterface, Ingress::LanHttpsPort),
+            $open => sprintf('open to the local network on port %d, without a route for %s', Ingress::LanHttpsPort, $this->project->name),
             $listenIp === Ingress::Loopback || $listenIp === '' => 'loopback only',
-            is_file($this->dynamicFile()) => sprintf('serving %s on the local network, https://%s:%d', $this->project->name, $names[0] ?? $listenIp, Ingress::HttpsPort),
-            default => sprintf('listening on %s, without a route for %s', $listenIp, $this->project->name),
+            default => sprintf('listening on %s with the vhosts of every project', $listenIp),
         }));
         io()->writeln(sprintf('  %-14s %s', 'Symfony CLI', match (true) {
             $symfonyStatus === null => 'not installed',
@@ -511,6 +511,14 @@ final readonly class LocalNetwork
         }
 
         return preg_match('/Listening on \S+/', $this->probe(['symfony', 'server:status', '--no-ansi']), $matches) === 1 ? $matches[0] : '';
+    }
+
+    /**
+     * An ingress recreated by a release that opened the ports of every project to the local network, instead of a port of its own.
+     */
+    private function ingressListensBeyondItsAddress(): bool
+    {
+        return ! in_array($this->ingress->runningListenIp(), [null, '', $this->ingress->listenIp()], true);
     }
 
     /**

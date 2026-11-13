@@ -12,9 +12,13 @@ services:
       - --providers.file.directory=/etc/traefik/dynamic
       - --providers.file.watch=true
       - --entrypoints.web.address=:80
+      - --entrypoints.web.asdefault=true
       - --entrypoints.web.forwardedheaders.insecure=${LOCAL_INGRESS_TRUST_FORWARDED_HEADERS:-false}
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls=true
+      - --entrypoints.websecure.asdefault=true
+      - --entrypoints.lan.address=:8444
+      - --entrypoints.lan.http.tls=true
       - --api.dashboard=true
     ports:
       - "${LOCAL_INGRESS_LISTEN_IP:-127.0.0.1}:8000:80"
@@ -27,7 +31,7 @@ services:
       - local-ingress
     labels:
       local-ingress.enable: "true"
-      local-ingress.version: "0.3.0"
+      local-ingress.version: "0.4.0"
       local-ingress.data-dir: ${LOCAL_INGRESS_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/local-ingress}
       local-ingress.listen-ip: ${LOCAL_INGRESS_LISTEN_IP:-127.0.0.1}
       traefik.http.routers.local-ingress-dashboard.rule: Host(`ingress.localhost`)

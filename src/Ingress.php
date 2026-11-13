@@ -27,13 +27,19 @@ final readonly class Ingress
 
     public const string ListenIpLabel = 'local-ingress.listen-ip';
 
-    public const string Version = '0.3.0';
+    public const string LocalNetworkLabel = 'local-ingress.local-network';
+
+    public const string Version = '0.4.0';
 
     public const string DefaultImage = 'traefik:v3.6';
 
     public const int HttpPort = 8000;
 
     public const int HttpsPort = 8443;
+
+    public const int LanHttpsPort = 8444;
+
+    public const string LanEntryPoint = 'lan';
 
     public const string DashboardUrl = 'http://ingress.localhost:8000/dashboard/';
 
@@ -47,7 +53,7 @@ final readonly class Ingress
 
     private string $listenIp;
 
-    public function __construct(?string $traefikImage = null, ?string $dataDirectory = null, ?string $listenIp = null)
+    public function __construct(?string $traefikImage = null, ?string $dataDirectory = null, ?string $listenIp = null, private bool $localNetwork = false)
     {
         $this->traefikImage = $traefikImage ?? self::environmentValue('LOCAL_INGRESS_TRAEFIK_IMAGE') ?? self::DefaultImage;
         $this->dataDirectory = rtrim($dataDirectory ?? self::defaultDataDirectory(), '/');
@@ -84,21 +90,29 @@ final readonly class Ingress
     }
 
     /**
-     * The address the ingress publishes its ports on: the loopback, unless a project opens it to the local network.
+     * The address the ingress publishes the ports of every project on: the loopback, unless the workstation sets another.
      */
     public function listenIp(): string
     {
         return $this->listenIp;
     }
 
-    public function listeningOn(string $listenIp): self
-    {
-        return new self($this->traefikImage, $this->dataDirectory, $listenIp);
-    }
-
     public function runningListenIp(): ?string
     {
         return $this->runningIngress()['listenIp'] ?? null;
+    }
+
+    /**
+     * The same ingress, publishing on every interface the one port whose entrypoint only serves the routes written for the local network.
+     */
+    public function openToLocalNetwork(): self
+    {
+        return new self($this->traefikImage, $this->dataDirectory, $this->listenIp, true);
+    }
+
+    public function runsOpenToLocalNetwork(): bool
+    {
+        return $this->runningIngress()['localNetwork'] ?? false;
     }
 
     public function certificatesDirectory(): string
@@ -114,6 +128,11 @@ final readonly class Ingress
     public function composeFile(): string
     {
         return dirname(__DIR__).'/ingress/compose.yaml';
+    }
+
+    public function localNetworkComposeFile(): string
+    {
+        return dirname(__DIR__).'/ingress/compose.lan.yaml';
     }
 
     public function ensureRunning(): void
@@ -147,7 +166,7 @@ final readonly class Ingress
     {
         $this->ensureDataDirectories();
         $this->ensureNetwork();
-        // The running ingress is not a holder of its own ports: the check also covers a recreate on another address.
+        // The running ingress is not a holder of its own ports: the check also covers a recreate that publishes one more.
         $this->ensurePortsAreFree();
         $this->up($this->buildRestartCommand());
     }
@@ -180,8 +199,9 @@ final readonly class Ingress
 
         if ($listenIp !== '' && $listenIp !== self::Loopback && $listenIp !== $this->listenIp) {
             $warnings[] = sprintf(
-                'The local ingress listens on %s, opened by a project served on the local network: every device there reaches the vhosts of every project until that project stops its local network access (LocalNetwork::stop()).',
+                'The local ingress listens on %s rather than %s, as a release that opened every vhost to the local network left it, or as LOCAL_INGRESS_LISTEN_IP asks elsewhere: every device reaching that address reaches the vhosts of every project. LocalNetwork::stop() brings it back.',
                 $listenIp,
+                $this->listenIp,
             );
         }
 
@@ -205,7 +225,7 @@ final readonly class Ingress
     }
 
     /**
-     * @return array{version: string, dataDirectory: string, listenIp: string}|null
+     * @return array{version: string, dataDirectory: string, listenIp: string, localNetwork: bool}|null
      */
     public function parseRunningIngress(string $output): ?array
     {
@@ -215,9 +235,9 @@ final readonly class Ingress
             return null;
         }
 
-        [$version, $dataDirectory, $listenIp] = array_pad(explode("\t", $line, 3), 3, '');
+        [$version, $dataDirectory, $listenIp, $localNetwork] = array_pad(explode("\t", $line, 4), 4, '');
 
-        return ['version' => trim($version), 'dataDirectory' => trim($dataDirectory), 'listenIp' => trim($listenIp)];
+        return ['version' => trim($version), 'dataDirectory' => trim($dataDirectory), 'listenIp' => trim($listenIp), 'localNetwork' => trim($localNetwork) === 'true'];
     }
 
     /**
@@ -272,7 +292,7 @@ final readonly class Ingress
         }
 
         return implode(PHP_EOL, [
-            sprintf('The local ingress needs %1$s:%2$d and %1$s:%3$d, shared by every project, and another container holds them:', $this->listenIp, self::HttpPort, self::HttpsPort),
+            sprintf('The local ingress needs %s, shared by every project, and another container holds them:', $this->publishedPorts()),
             ...array_values(array_unique($lines)),
             'Stop it, move that project to the local ingress (label local-ingress.enable and the external network local-ingress), then start again.',
         ]);
@@ -297,10 +317,8 @@ final readonly class Ingress
     {
         if (str_contains($errorOutput, 'port is already allocated') || str_contains($errorOutput, 'address already in use')) {
             return sprintf(
-                'The local ingress cannot listen on %1$s:%2$d and %1$s:%3$d: another process already uses one of these ports (a former Traefik, "php artisan serve", "symfony server:start"...). Free them, then start again.',
-                $this->listenIp,
-                self::HttpPort,
-                self::HttpsPort,
+                'The local ingress cannot listen on %s: another process already uses one of these ports (a former Traefik, "php artisan serve", "symfony server:start"...). Free them, then start again.',
+                $this->publishedPorts(),
             );
         }
 
@@ -364,7 +382,7 @@ final readonly class Ingress
             '--filter',
             'label=com.docker.compose.service='.self::Service,
             '--format',
-            sprintf('{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}', self::VersionLabel, self::DataDirectoryLabel, self::ListenIpLabel),
+            sprintf('{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}{{"\t"}}{{.Label "%s"}}', self::VersionLabel, self::DataDirectoryLabel, self::ListenIpLabel, self::LocalNetworkLabel),
         ];
     }
 
@@ -373,11 +391,34 @@ final readonly class Ingress
      */
     private function buildComposeBase(): array
     {
-        return ['docker', 'compose', '--project-name', self::ProjectName, '--file', $this->composeFile()];
+        return [
+            'docker',
+            'compose',
+            '--project-name',
+            self::ProjectName,
+            '--file',
+            $this->composeFile(),
+            ...($this->localNetwork ? ['--file', $this->localNetworkComposeFile()] : []),
+        ];
     }
 
     /**
-     * @return array{version: string, dataDirectory: string, listenIp: string}|null
+     * @return list<int>
+     */
+    private function hostPorts(): array
+    {
+        return [self::HttpPort, self::HttpsPort, ...($this->localNetwork ? [self::LanHttpsPort] : [])];
+    }
+
+    private function publishedPorts(): string
+    {
+        $ports = sprintf('%1$s:%2$d and %1$s:%3$d', $this->listenIp, self::HttpPort, self::HttpsPort);
+
+        return $this->localNetwork ? sprintf('%s, and %s:%d for the local network', $ports, self::EveryInterface, self::LanHttpsPort) : $ports;
+    }
+
+    /**
+     * @return array{version: string, dataDirectory: string, listenIp: string, localNetwork: bool}|null
      */
     private function runningIngress(): ?array
     {
@@ -399,7 +440,7 @@ final readonly class Ingress
     {
         $holdersByPort = [];
 
-        foreach ([self::HttpPort, self::HttpsPort] as $port) {
+        foreach ($this->hostPorts() as $port) {
             $process = run($this->buildPortHoldersCommand($port), context()->withAllowFailure()->withQuiet());
             $holdersByPort[$port] = ($process->getExitCode() ?? 1) === 0 ? $this->parsePortHolders($process->getOutput()) : [];
         }
