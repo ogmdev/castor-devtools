@@ -180,7 +180,7 @@ A step returns a list of `Finding`. A finding with `halts: true` stops the walk,
 
 ## The shared ingress
 
-`Ingress::ensureRunning()` starts the `local-ingress` compose project shipped in `ingress/compose.yaml`: Traefik on `127.0.0.1:8000` (http) and `127.0.0.1:8443` (https), attached to the external Docker network `local-ingress`.
+`Ingress::ensureRunning()` starts the `local-ingress` compose project shipped in `ingress/compose.yaml`: Traefik on `127.0.0.1:8000` (http) and `127.0.0.1:8443` (https), attached to the external Docker network `local-ingress`. A third entrypoint, `lan`, is only published while a project is served on the local network (see [The local network](#the-local-network)): `web` and `websecure` are the default entrypoints, so a router that names none never lands on it.
 
 It works the same with one project, several, or any number of them: no project depends on another, none breaks or downgrades the ingress of another.
 
@@ -227,9 +227,9 @@ The ingress belongs to the workstation, not to a project, so its settings are en
 | `LOCAL_INGRESS_TRAEFIK_IMAGE` | `traefik:v3.6` | Traefik image, for instance from a registry mirror |
 | `LOCAL_INGRESS_DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket, for rootless Docker or Podman |
 | `LOCAL_INGRESS_TRUST_FORWARDED_HEADERS` | `false` | trust the `X-Forwarded-*` headers received on port 8000, behind a tunnel for instance |
-| `LOCAL_INGRESS_LISTEN_IP` | `127.0.0.1` | the address the ports are published on; `LocalNetwork` sets it for the time of a local network session |
+| `LOCAL_INGRESS_LISTEN_IP` | `127.0.0.1` | the address ports 8000 and 8443 are published on; `LocalNetwork` leaves it alone |
 
-Traefik reads the Docker socket to discover the containers. Mounted read-only or not, the socket gives full access to the Docker engine: the ingress only listens on the loopback (until a project opens it to the local network, see below), and routes on the `Host` header only.
+Traefik reads the Docker socket to discover the containers. Mounted read-only or not, the socket gives full access to the Docker engine: the ingress only publishes the vhosts on the loopback, the local network only ever reaches the `lan` entrypoint (see below), and both route on the `Host` header only.
 
 The dashboard answers on http://ingress.localhost:8000/dashboard/. Port 8000 is also the default of `php artisan serve` and `symfony server:start`: stop them before starting the ingress.
 
@@ -240,9 +240,9 @@ The dashboard answers on http://ingress.localhost:8000/dashboard/. Port 8000 is 
 | Method | Server | Port |
 |---|---|---|
 | `startSymfonyServer()` | the Symfony CLI server, on every interface, with the certificate as a p12 without password (openssl converts it: the CLI reads no other) | `8001` by default |
-| `startTraefik()` | the shared ingress: a route for the workstation names, forwarded to the project's own Traefik service, and the ingress recreated on every interface | `8443` |
+| `startTraefik()` | the shared ingress: a route for the workstation names on the `lan` entrypoint, forwarded to the project's own Traefik service, and the ingress recreated with that entrypoint published on every interface | `8444` |
 
-Then `check()` reads the certificate the server sends and verifies it covers the names, `showStatus()` says what runs, and `stop()` stops the Symfony server it started (the one on the port remembered at start, never a `symfony serve` of your own), removes the route and brings the ingress back on `LOCAL_INGRESS_LISTEN_IP`, the loopback by default, unless another project is still served through it.
+Then `check()` reads the certificate the server sends and verifies it covers the names, `showStatus()` says what runs, and `stop()` stops the Symfony server it started (the one on the port remembered at start, never a `symfony serve` of your own), removes the route and recreates the ingress without the `lan` port, unless another project is still served through it.
 
 ```php
 #[AsTask(name: 'lan:start', description: 'Serves the project on the local network; --via=symfony for the Symfony CLI server.')]
@@ -260,7 +260,7 @@ function lan_stop(): void
 
 A fresh certificate is issued on every start, since the address changes with the network (a running Symfony CLI server started here is restarted to serve it). The authority does not: each device trusts `rootCA.pem` from `mkcert -CAROOT` once, in its own settings, and the vhosts of every project follow. Through the ingress, use the name rather than the address: without a server name, Traefik answers with its default certificate. The route forwards to the Docker service the project labels on a router of its first subdomain, on a container the ingress routes: that router needs `traefik.http.services.<router>.loadbalancer.server.port` or `traefik.http.routers.<router>.service`; routers served by another provider, such as the `noop@internal` of a redirect, are passed over.
 
-While the ingress listens on every interface, every device on the network reaches the vhosts of every project, by `Host` header: `Ingress::ensureRunning()` keeps warning about it until `stop()`.
+Ports 8000 and 8443 stay on `LOCAL_INGRESS_LISTEN_IP` the whole time. A device on the network only reaches port 8444, whose entrypoint serves the routes `startTraefik()` writes and nothing else: a forged `Host` header finds no other vhost there, of this project or of another. An ingress a former release left with ports 8000 and 8443 on every interface is recreated by the next `Ingress::ensureRunning()`, `startTraefik()` or `stop()` of a project on this release.
 
 ## Vite through the ingress
 

@@ -58,6 +58,30 @@ test('traefik routes every container that opts in with the one label, and nothin
         ->and($traefik['labels'][Ingress::EnableLabel])->toBe('true');
 });
 
+test('the local network reaches an entrypoint of its own, published on demand, which no router joins unless it names it', function (): void {
+    $traefik = ingressCompose()['services'][Ingress::Service];
+    $localNetwork = Yaml::parseFile((new Ingress(dataDirectory: '/data'))->localNetworkComposeFile())['services'][Ingress::Service];
+    $ingress = new Ingress(dataDirectory: '/data');
+
+    expect($traefik['command'])->toContain(
+        '--entrypoints.web.asdefault=true',
+        '--entrypoints.websecure.asdefault=true',
+        sprintf('--entrypoints.%s.address=:%d', Ingress::LanEntryPoint, Ingress::LanHttpsPort),
+        sprintf('--entrypoints.%s.http.tls=true', Ingress::LanEntryPoint),
+    )
+        ->and(implode(' ', $traefik['ports']))->not->toContain((string) Ingress::LanHttpsPort)
+        ->and($traefik['labels'])->not->toHaveKey(Ingress::LocalNetworkLabel)
+        ->and($localNetwork)->toBe([
+            'ports' => [sprintf('%s:%2$d:%2$d', Ingress::EveryInterface, Ingress::LanHttpsPort)],
+            'labels' => [Ingress::LocalNetworkLabel => 'true'],
+        ])
+        ->and($ingress->buildUpCommand())->not->toContain($ingress->localNetworkComposeFile())
+        ->and($ingress->openToLocalNetwork()->buildUpCommand())->toBe([
+            'docker', 'compose', '--project-name', Ingress::ProjectName, '--file', $ingress->composeFile(), '--file', $ingress->localNetworkComposeFile(), 'up', '-d', '--wait',
+        ])
+        ->and($ingress->openToLocalNetwork()->composeEnvironment())->toBe($ingress->composeEnvironment());
+});
+
 test('forwarded headers are only trusted when the workstation asks for it', function (): void {
     expect(ingressCompose()['services'][Ingress::Service]['command'])
         ->toContain('--entrypoints.web.forwardedheaders.insecure=${LOCAL_INGRESS_TRUST_FORWARDED_HEADERS:-false}');
@@ -94,13 +118,13 @@ test('certificates and dynamic files live in one data directory every project sh
         ]);
 });
 
-test('the ingress publishes its ports on the loopback unless the workstation or a project opens them', function (): void {
+test('the ingress publishes the ports of every project on the loopback unless the workstation sets another address', function (): void {
     expect(withEnvironment(['LOCAL_INGRESS_LISTEN_IP' => null], fn (): string => (new Ingress(dataDirectory: '/data'))->listenIp()))->toBe(Ingress::Loopback)
         ->and(withEnvironment(['LOCAL_INGRESS_LISTEN_IP' => '192.168.1.10'], fn (): string => (new Ingress(dataDirectory: '/data'))->listenIp()))->toBe('192.168.1.10')
-        ->and((new Ingress('traefik:v3.6', '/data'))->listeningOn(Ingress::EveryInterface)->composeEnvironment())->toBe([
+        ->and(withEnvironment(['LOCAL_INGRESS_LISTEN_IP' => '192.168.1.10'], fn (): array => (new Ingress('traefik:v3.6', '/data'))->openToLocalNetwork()->composeEnvironment()))->toBe([
             'LOCAL_INGRESS_DATA_DIR' => '/data',
             'LOCAL_INGRESS_TRAEFIK_IMAGE' => 'traefik:v3.6',
-            'LOCAL_INGRESS_LISTEN_IP' => Ingress::EveryInterface,
+            'LOCAL_INGRESS_LISTEN_IP' => '192.168.1.10',
         ]);
 });
 
@@ -133,8 +157,9 @@ test('a kept ingress is only reported when it is newer than this project or read
     $ingress = new Ingress(dataDirectory: '/data');
 
     expect($ingress->parseRunningIngress(''))->toBeNull()
-        ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data', 'listenIp' => ''])
-        ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\t0.0.0.0\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data', 'listenIp' => '0.0.0.0'])
+        ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data', 'listenIp' => '', 'localNetwork' => false])
+        ->and($ingress->parseRunningIngress("0.3.0\t/data\t0.0.0.0\t\n"))->toBe(['version' => '0.3.0', 'dataDirectory' => '/data', 'listenIp' => '0.0.0.0', 'localNetwork' => false])
+        ->and($ingress->parseRunningIngress(Ingress::Version."\t/data\t127.0.0.1\ttrue\n"))->toBe(['version' => Ingress::Version, 'dataDirectory' => '/data', 'listenIp' => '127.0.0.1', 'localNetwork' => true])
         ->and($ingress->runningIngressWarnings(Ingress::Version, '/data'))->toBe([])
         ->and($ingress->runningIngressWarnings(Ingress::Version, '/data', ''))->toBe([])
         ->and($ingress->runningIngressWarnings(Ingress::Version, '/data', Ingress::EveryInterface)[0])->toContain('0.0.0.0', 'local network', 'LocalNetwork::stop()')
@@ -178,7 +203,8 @@ test('a port already taken is explained instead of the raw compose error', funct
     $ingress = new Ingress(dataDirectory: '/data');
 
     expect($ingress->failureMessage(1, 'Bind for 127.0.0.1:8000 failed: port is already allocated'))->toContain('another process', '127.0.0.1:8000', '127.0.0.1:8443')
-        ->and($ingress->listeningOn(Ingress::EveryInterface)->failureMessage(1, 'address already in use'))->toContain('0.0.0.0:8000', '0.0.0.0:8443')
-        ->and((string) $ingress->listeningOn(Ingress::EveryInterface)->portConflictMessage([8000 => [['name' => 'stray', 'project' => '', 'service' => '']]]))->toContain('needs 0.0.0.0:8000 and 0.0.0.0:8443')
+        ->and($ingress->failureMessage(1, 'address already in use'))->not->toContain('8444')
+        ->and($ingress->openToLocalNetwork()->failureMessage(1, 'address already in use'))->toContain('127.0.0.1:8000 and 127.0.0.1:8443, and 0.0.0.0:8444 for the local network')
+        ->and((string) (new Ingress('traefik:v3.6', '/data', '192.168.1.10'))->portConflictMessage([8000 => [['name' => 'stray', 'project' => '', 'service' => '']]]))->toContain('needs 192.168.1.10:8000 and 192.168.1.10:8443,')
         ->and($ingress->failureMessage(17, 'something else'))->toContain('exit code 17', 'logs traefik');
 });
