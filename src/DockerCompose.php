@@ -42,7 +42,7 @@ final readonly class DockerCompose
     {
         $this->project->warnBeforeBuild();
 
-        SecretEnvironment::runWithoutCastorPrintingIt($this->buildStartContainersCommand($service, $forceRecreate), $environment);
+        SecretEnvironment::runWithoutCastorPrintingIt($this->buildStartContainersCommand($service, $forceRecreate), $environment, InteractiveContext::whenSupported());
 
         $this->reloadNginxUpstreams($service);
     }
