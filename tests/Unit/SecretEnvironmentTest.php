@@ -27,6 +27,8 @@ const START_SCENARIO = <<<'PHP_WRAP'
 
             public bool $allowFailure = false;
 
+            public bool $interactive = false;
+
             public function withEnvironment(array $environment): self
             {
                 $context = clone $this;
@@ -35,9 +37,23 @@ const START_SCENARIO = <<<'PHP_WRAP'
                 return $context;
             }
 
-            public function withAllowFailure(): self
+            public function withAllowFailure(bool $allowFailure = true): self
             {
                 $context = clone $this;
+                $context->allowFailure = $allowFailure;
+
+                return $context;
+            }
+
+            public function supportsInteraction(): bool
+            {
+                return getenv('SUPPORTS_INTERACTION') === '1';
+            }
+
+            public function toInteractive(): self
+            {
+                $context = clone $this;
+                $context->interactive = true;
                 $context->allowFailure = true;
 
                 return $context;
@@ -59,7 +75,7 @@ const START_SCENARIO = <<<'PHP_WRAP'
             $context ??= context();
             $process = new Process($command, null, $context->environment);
 
-            echo json_encode(['env' => $process->getEnv(), 'runnable' => $process->getCommandLine()]), PHP_EOL;
+            echo json_encode(['env' => $process->getEnv(), 'runnable' => $process->getCommandLine(), 'interactive' => $context->interactive]), PHP_EOL;
 
             $process->run();
 
@@ -110,7 +126,7 @@ const START_SCENARIO = <<<'PHP_WRAP'
     }
     PHP_WRAP;
 
-function startContainersWithSecret(string $directory, int $secretCommandExitCode): Process
+function startContainersWithSecret(string $directory, int $secretCommandExitCode, bool $supportsInteraction = false): Process
 {
     mkdir($directory.'/fake-bin');
     file_put_contents($directory.'/fake-bin/docker', FAKE_DOCKER);
@@ -123,6 +139,7 @@ function startContainersWithSecret(string $directory, int $secretCommandExitCode
         'DOCKER_CALLS' => $directory.'/docker-calls',
         'SECRET_COMMAND_EXIT_CODE' => (string) $secretCommandExitCode,
         'APP_SECRETS_KEY' => '',
+        'SUPPORTS_INTERACTION' => $supportsInteraction ? '1' : '0',
     ]);
     $process->run();
 
@@ -148,6 +165,19 @@ test('a failing start receives its secret, and Castor can print it neither from 
         ->and(dockerCallContaining($directory, 'up'))->toEndWith('['.SECRET_CANARY.']')
         ->and($process->getOutput().$process->getErrorOutput())->not->toContain(SECRET_CANARY)
         ->and($process->getOutput())->toContain("'up'");
+});
+
+test('in a terminal, the start hands compose the terminal for its progress display, and a failed start still stops the task', function (): void {
+    $directory = temporaryDirectory('castor-secret-environment');
+
+    $process = startContainersWithSecret($directory, 7, supportsInteraction: true);
+    $upRun = array_values(array_filter(
+        array_map(fn (string $line): mixed => json_decode($line, true), explode(PHP_EOL, $process->getOutput())),
+        fn (mixed $run): bool => is_array($run) && str_contains($run['runnable'], "'up'"),
+    ))[0] ?? [];
+
+    expect($process->getExitCode())->toBe(7, $process->getErrorOutput())
+        ->and($upRun['interactive'] ?? null)->toBeTrue();
 });
 
 test('the secret stops at the start and reaches neither the nginx reload nor the environment of the task', function (): void {
